@@ -50,7 +50,7 @@ This will save point tracking files in the `.npz` format in the same location as
 
 ### Full loop
 
-Just run the `full_pipeline.py` with the path to the bridge dataset. So far I have stuff implmented all the way up until the auxilary loss for the each of the videos. Also since I haven't yet figured out how to generate the video, I just make a copy of the robot video and pretend its a generated video.
+Just run the `full_pipeline.py` with the path to the bridge dataset. So far I have stuff implmented all the way up until the auxiliary loss for the each of the videos. Also since I haven't yet figured out how to generate the video, I just make a copy of the robot video and pretend its a generated video.
 
 NOTE: this will fail unless you have the saved tracks for the video already. 
 ```bash
