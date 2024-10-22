@@ -88,16 +88,6 @@ def main(video_path, resize_height=224, resize_width=224, device='cuda:0'):
     print("zg shape: (1, num_latents, hidden_dim) = ", zg.shape)
 
 
-    # Uncomment this block to use random tracks instead of loading from files
-    # ----------------------------------------------------------
-    # num_frames = resized_video.shape[0]
-    # num_points = 1024  # Number of points to track
-    # tracks = np.random.rand(num_points, num_frames, 2) * np.array([og_video_width, og_video_height])
-    # visibles = np.random.rand(num_points, num_frames) > 0.5
-    # print("Using random tracks and visibles.")
-    # ----------------------------------------------------------
-
-
     # Load preproccessed point tracking results  
     tracking_results = load_tracking_results(video_path)
     tracks = tracking_results['tracks']

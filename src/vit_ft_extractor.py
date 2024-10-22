@@ -20,23 +20,22 @@ class VideoFeatureExtractor:
         pixel_values = inputs['pixel_values'].to(self.device)
         return pixel_values
 
-    def extract_features(self, video_frames, num_frames_to_process=16):
-        # Determine the total number of frames in the video
+    def extract_features(self, video_frames, sampled_indices):
+        """
+        Extracts features from the specified sampled indices of the video frames.
+
+        Args:
+        - video_frames: List of frames from the video.
+        - sampled_indices: List of indices indicating which frames to process.
+
+        Returns:
+        - features: Numpy array of extracted features from the sampled frames.
+        - sampled_indices: The same input sampled indices, returned for consistency.
+        """
+        # Ensure sampled indices are within the range of available frames
         num_frames = len(video_frames)
+        sampled_indices = [idx for idx in sampled_indices if 0 <= idx < num_frames]
 
-        # Calculate indices to sample from, ensuring the first and last frames are included
-        if num_frames_to_process >= num_frames:
-            sampled_indices = list(range(num_frames))  # Use all frames if video is shorter
-        else:
-            # Evenly sample frames, ensuring first and last frames are always included
-            sampled_indices = [0]  # Start with the first frame
-            step = (num_frames - 1) / (num_frames_to_process - 1)
-            for i in range(1, num_frames_to_process - 1):
-                sampled_indices.append(round(i * step))
-            sampled_indices.append(num_frames - 1)  # Ensure the last frame is included
-            sampled_indices = sorted(set(sampled_indices))
-
-        # Extract features from the sampled frames
         features = []
         for idx in sampled_indices:
             frame = video_frames[idx]
