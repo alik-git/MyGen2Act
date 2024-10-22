@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import tensorflow_datasets as tfds
 from PIL import Image
@@ -65,54 +66,58 @@ def save_tracking_results(tracks, visibles, tracks_output_fp, visibles_output_fp
     np.savez_compressed(visibles_output_fp, visibles=visibles)
     print(f"Visibles saved to: {visibles_output_fp}")
 
-# Load the TAPIR model
-model = tapir_model.TAPIR(pyramid_level=1)
-model.load_state_dict(torch.load('/home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt'))
-model = model.to(device)
-model.eval()
-torch.set_grad_enabled(False)
+def main(bridge_data_path, model_checkpoint_fp):
+    # Load the TAPIR model
+    model = tapir_model.TAPIR(pyramid_level=1)
+    model.load_state_dict(torch.load(model_checkpoint_fp))
+    model = model.to(device)
+    model.eval()
+    torch.set_grad_enabled(False)
 
-# Your dataset path
-bridge_data_path = "/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/"
+    dataset_builder = tfds.builder_from_directory(bridge_data_path)
+    dataset = dataset_builder.as_dataset(split='train[0:10]')
 
-dataset_builder = tfds.builder_from_directory(bridge_data_path)
-dataset = dataset_builder.as_dataset(split='train[0:10]')
+    for episode in dataset:
+        # Get images from the episode
+        images = [step['observation']['image_0'] for step in episode['steps']]
+        images = [Image.fromarray(image.numpy()) for image in images]
 
-for episode in dataset:
-    # Get images from the episode
-    images = [step['observation']['image_0'] for step in episode['steps']]
-    images = [Image.fromarray(image.numpy()) for image in images]
-    # print(f"Image resolution: {images[0].size}")
-    # print(f"Number of images: {len(images)}")
+        # Convert images to frames (NumPy array)
+        frames = np.stack([np.array(image) for image in images], axis=0)  # [num_frames, height, width, 3]
+        num_frames, height, width, _ = frames.shape
+        
+        episode_label = construct_episode_label(episode)
 
-    # Convert images to frames (NumPy array)
-    frames = np.stack([np.array(image) for image in images], axis=0)  # [num_frames, height, width, 3]
-    num_frames, height, width, _ = frames.shape
-    
-    episode_label = construct_episode_label(episode)
+        tracks_output_fp = f"{bridge_data_path}/{episode_label}_tracks.npz"
+        visibles_output_fp = f"{bridge_data_path}/{episode_label}_visibles.npz"
 
-    tracks_output_fp = f"/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/{episode_label}_tracks.npz"
-    visibles_output_fp = f"/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/{episode_label}_visibles.npz"
+        # Sample grid points
+        num_points_each_side = 30
+        query_points = sample_grid_points(height, width, num_points_each_side)
 
-    # Sample grid points
-    num_points_each_side = 30
-    query_points = sample_grid_points(height, width, num_points_each_side)
+        # Convert frames and query points to PyTorch tensors and move to device
+        frames_tensor = torch.tensor(frames).to(device)
+        query_points_tensor = torch.tensor(query_points).to(device)
 
-    # Convert frames and query points to PyTorch tensors and move to device
-    frames_tensor = torch.tensor(frames).to(device)
-    query_points_tensor = torch.tensor(query_points).to(device)
+        # Run inference
+        tracks, visibles = inference(frames_tensor, query_points_tensor, model)
 
-    # Run inference
-    tracks, visibles = inference(frames_tensor, query_points_tensor, model)
+        # Convert tracks and visibles to NumPy arrays
+        tracks = tracks.cpu().detach().numpy()
+        visibles = visibles.cpu().detach().numpy()
 
-    # Convert tracks and visibles to NumPy arrays
-    tracks = tracks.cpu().detach().numpy()
-    visibles = visibles.cpu().detach().numpy()
+        # Convert grid coordinates to pixel coordinates
+        tracks = transforms.convert_grid_coordinates(tracks, (width, height), (width, height))
 
-    # Convert grid coordinates to pixel coordinates
-    tracks = transforms.convert_grid_coordinates(tracks, (width, height), (width, height))
+        # Save the tracking results
+        save_tracking_results(tracks, visibles, tracks_output_fp, visibles_output_fp)
 
-    # Save the tracking results
-    save_tracking_results(tracks, visibles, tracks_output_fp, visibles_output_fp)
-    
-    k=1
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Run TAPIR model inference on bridge dataset.')
+    parser.add_argument('--bridge_data_path', type=str, default='/home/kasm-user/alik_local_data/bridge_dataset/1.0.0',
+                        help='Path to the bridge dataset directory.')
+    parser.add_argument('--model_checkpoint_fp', type=str, default='/home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt',
+                        help='Path to the model checkpoint file.')
+    args = parser.parse_args()
+
+    main(args.bridge_data_path, args.model_checkpoint_fp)

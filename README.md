@@ -14,6 +14,10 @@ sudo apt-get update
 sudo apt-get -y install cuda-toolkit-12-6
 ```
 
+### Install the point tracking repo
+
+Follow the instructions on their readme [here](https://github.com/google-deepmind/tapnet). We need the PyTorch version of the "BootsTAPIR" model, so download the checkpoint for that [here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt).
+
 ### Setup conda env
 
 
@@ -27,90 +31,34 @@ conda activate gen2act
 pip install -r requirements.txt
 ```
 
+### Downlaod the bridge dataset
+
+Follow the instructions for that from their [website](https://github.com/rail-berkeley/bridge_data_v2) 
+
 # Usage
 
-Just run the `video_processor.py` with (optional) path to your video 
+### First compute the point tracking
+
+Use the `pt_tracker.py` file for this. Replace the paths to match yours 
+
+```bash
+python src/pt_tracker.py --bridge_data_path /home/kasm-user/alik_local_data/bridge_dataset/1.0.0 \
+--model_checkpoint_fp /home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt
+``` 
+
+This will save point tracking files in the `.npz` format in the same location as your bridge dataset.
+
+### Full loop
+
+Just run the `full_pipeline.py` with the path to the bridge dataset. So far I have stuff implmented all the way up until the auxilary loss for the each of the videos. Also since I haven't yet figured out how to generate the video, I just make a copy of the robot video and pretend its a generated video.
 
 NOTE: this will fail unless you have the saved tracks for the video already. 
 ```bash
 cd path/to/MyGen2Act
 conda activate gen2act
-python video_processor.py --video_path /path/to/video.mp4
+python video_processor.py --bridge_data_path /home/kasm-user/alik_local_data/bridge_dataset/1.0.0/
 ```
 
-### Use random tracks (if you dont have preproccessed tracks)
-This is super hacky but just uncomment this code here in the `video_processor.py` file. Basically take this part 
-```python
-# Uncomment this block to use random tracks instead of loading from files
-# ----------------------------------------------------------
-# num_frames = resized_video.shape[0]
-# num_points = 1024  # Number of points to track
-# tracks = np.random.rand(num_points, num_frames, 2) * np.array([og_video_width, og_video_height])
-# visibles = np.random.rand(num_points, num_frames) > 0.5
-# print("Using random tracks and visibles.")
-# ----------------------------------------------------------
-
-
-# Load preproccessed point tracking results  
-tracking_results = load_tracking_results(video_path)
-tracks = tracking_results['tracks']
-visibles = tracking_results['visibles']
-print(f"Tracks shape: {tracks.shape}")
-print(f"Visibles shape: {visibles.shape}")
-```
-and change the comments to turn it into this 
-```python
-# Uncomment this block to use random tracks instead of loading from files
-# ----------------------------------------------------------
-num_frames = resized_video.shape[0]
-num_points = 1024  # Number of points to track
-tracks = np.random.rand(num_points, num_frames, 2) * np.array([og_video_width, og_video_height])
-visibles = np.random.rand(num_points, num_frames) > 0.5
-print("Using random tracks and visibles.")
-# ----------------------------------------------------------
-
-
-# Load preproccessed point tracking results  
-# tracking_results = load_tracking_results(video_path)
-# tracks = tracking_results['tracks']
-# visibles = tracking_results['visibles']
-print(f"Tracks shape: {tracks.shape}")
-print(f"Visibles shape: {visibles.shape}")
-```
-and now it'll just use random numbers for the tracked points so you can run the code.
-
-### Sample output
-
-This is what the ouput looks like when I run the code
-
-```bash
-(gen2act) (base) ubuntu@b74b6fe5af4b:~/MyGen2Act$ python video_processor.py 
-2024-10-21 13:21:16.166955: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:485] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
-2024-10-21 13:21:16.178152: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:8454] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
-2024-10-21 13:21:16.181557: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1452] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
-2024-10-21 13:21:16.743279: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
-Video frames shape: (num_frames, height, width, channels) = (60, 480, 640, 3)
-Resized video frames shape: (num_frames, height, width, channels) = (60, 224, 224, 3)
-/opt/anaconda3/envs/gen2act/lib/python3.10/site-packages/transformers/models/vit/feature_extraction_vit.py:28: FutureWarning: The class ViTFeatureExtractor is deprecated and will be removed in version 5 of Transformers. Please use ViTImageProcessor instead.
-  warnings.warn(
-Some weights of ViTModel were not initialized from the model checkpoint at google/vit-base-patch16-224 and are newly initialized: ['vit.pooler.dense.bias', 'vit.pooler.dense.weight']
-You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
-It looks like you are trying to rescale already rescaled images. If the input images have pixel values between 0 and 1, set `do_rescale=False` to avoid rescaling them again.
-Extracted features shape: (num_frames_processed, num_tokens, hidden_dim) =  (16, 197, 768)
-i0_g shape: (1, num_tokens, hidden_dim) =  torch.Size([1, 197, 768])
-PerceiverResampler output shape: (1, num_latents, hidden_dim) =  torch.Size([1, 64, 768])
-zg shape: (1, num_latents, hidden_dim) =  torch.Size([1, 64, 768])
-Tracks loaded from: /home/kasm-user/SimplerEnv-OpenVLA/octo_policy_video2_tracks.npz
-Visibles loaded from: /home/kasm-user/SimplerEnv-OpenVLA/octo_policy_video2_visibles.npz
-Tracks shape: (1024, 60, 2)
-Visibles shape: (1024, 60)
-P0_normalized shape: (1, num_points, 2) =  torch.Size([1, 1024, 2])
-Ground truth tracks shape: (num_points, num_frames_processed, 2) =  (1024, 16, 2)
-/opt/anaconda3/envs/gen2act/lib/python3.10/site-packages/torch/nn/modules/transformer.py:306: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.self_attn.batch_first was not True(use batch_first for better inference performance)
-  warnings.warn(f"enable_nested_tensor is True, but self.use_nested_tensor is False because {why_not_sparsity_fast_path}")
-Auxiliary loss: 0.6787735223770142
-(gen2act) (base) ubuntu@b74b6fe5af4b:~/MyGen2Act$ 
-```
 
 # Scratch space below (ignore)
 ignore all below, these are details for my personal setup
