@@ -39,3 +39,34 @@ class TrackPredictionTransformer(nn.Module):
         # Reshape to [batch_size, num_points, num_frames, 2]
         track_predictions = track_predictions.view(batch_size, num_points, self.num_frames, 2)
         return track_predictions
+
+if __name__ == "__main__":
+    device = 'cuda:0'
+
+    # Set random seed for reproducibility
+    torch.manual_seed(0)
+
+    # Define model hyperparameters
+    batch_size = 1
+    num_points = 1024
+    num_tokens = 197
+    num_latents = 64
+    hidden_dim = 768
+    num_frames = 16
+
+    # Initialize random input tensors with the expected shapes
+    P0 = torch.randn(batch_size, num_points, 2, device=device)
+    i0_g = torch.randn(batch_size, num_tokens, hidden_dim, device=device)
+    zg = torch.randn(batch_size, num_latents, hidden_dim, device=device)
+
+    # Initialize the model
+    model = TrackPredictionTransformer(
+        point_dim=2, hidden_dim=hidden_dim, num_layers=6, num_heads=8, num_frames=num_frames
+    ).to(device)
+
+    # Run a forward pass
+    with torch.no_grad():
+        track_predictions = model(P0, i0_g, zg)
+
+    # Print final output shape
+    print(f"Final track predictions shape: {track_predictions.shape}")
