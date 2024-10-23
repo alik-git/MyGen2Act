@@ -18,6 +18,18 @@ class TrackPredictionTransformer(nn.Module):
         # i0_g: [batch_size, num_tokens, hidden_dim]
         # zg: [batch_size, num_latents, hidden_dim]
         batch_size, num_points, _ = P0.shape
+
+        # # Print input shapes
+        # print(f"P0 shape: {P0.shape}")
+        # print(f"i0_g shape: {i0_g.shape}")
+        # print(f"zg shape: {zg.shape}")
+
+        # # Print model parameters' sizes
+        # total_params = sum(p.numel() for p in self.parameters())
+        # print(f"Total model parameters: {total_params}")
+        # for name, param in self.named_parameters():
+        #     print(f"{name}: {param.shape} - {param.numel() / 1e6:.2f}M parameters")
+
         # Embed P0
         point_embeds = self.point_embedding(P0)  # [batch_size, num_points, hidden_dim]
         # Ensure i0_g and zg have the same batch size
