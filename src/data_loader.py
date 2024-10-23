@@ -170,20 +170,47 @@ def build_dataset(bridge_data_path, trajectory_length=8, next_actions_length=4, 
     }
 
     output_shapes = {
-        'trajectory_images': sample_trajectory['trajectory_images'].shape,
-        'trajectory_actions': sample_trajectory['trajectory_actions'].shape,
-        'next_actions': sample_trajectory['next_actions'].shape,
-        'trajectory_discount': sample_trajectory['trajectory_discount'].shape,
-        'trajectory_is_first': sample_trajectory['trajectory_is_first'].shape,
-        'trajectory_is_last': sample_trajectory['trajectory_is_last'].shape,
-        'trajectory_is_terminal': sample_trajectory['trajectory_is_terminal'].shape,
-        'language_instruction': tf.TensorShape([]),  # scalar string
-        'trajectory_reward': sample_trajectory['trajectory_reward'].shape,
-        'whole_episode_images': sample_trajectory['whole_episode_images'].shape,
-        'trajectory_tracks': sample_trajectory['trajectory_tracks'].shape,
-        'trajectory_visibles': sample_trajectory['trajectory_visibles'].shape,
-        'whole_episode_tracks': sample_trajectory['whole_episode_tracks'].shape,
-        'whole_episode_visibles': sample_trajectory['whole_episode_visibles'].shape
+        'trajectory_images': sample_trajectory['trajectory_images'].shape,  
+        # Shape: (8, 256, 256, 3) - 8 frames, 256x256 pixels, 3 channels
+
+        'trajectory_actions': sample_trajectory['trajectory_actions'].shape,  
+        # Shape: (8, 7) - 8 steps, 7 action dimensions
+
+        'next_actions': sample_trajectory['next_actions'].shape,  
+        # Shape: (4, 7) - 4 future actions, 7 dimensions
+
+        'trajectory_discount': sample_trajectory['trajectory_discount'].shape,  
+        # Shape: (8,) - 8 discount values
+
+        'trajectory_is_first': sample_trajectory['trajectory_is_first'].shape,  
+        # Shape: (8,) - 8 boolean flags indicating first step
+
+        'trajectory_is_last': sample_trajectory['trajectory_is_last'].shape,  
+        # Shape: (8,) - 8 boolean flags indicating last step
+
+        'trajectory_is_terminal': sample_trajectory['trajectory_is_terminal'].shape,  
+        # Shape: (8,) - 8 boolean flags indicating terminal step
+
+        'language_instruction': tf.TensorShape([]),  
+        # Shape: scalar string
+
+        'trajectory_reward': sample_trajectory['trajectory_reward'].shape,  
+        # Shape: (8,) - 8 reward values
+
+        'whole_episode_images': sample_trajectory['whole_episode_images'].shape,  
+        # Shape: (16, 256, 256, 3) - 16 frames, 256x256 pixels, 3 channels
+
+        'trajectory_tracks': sample_trajectory['trajectory_tracks'].shape,  
+        # Shape: (1024, 8, 2) - 1024 points, 8 frames, 2D coordinates
+
+        'trajectory_visibles': sample_trajectory['trajectory_visibles'].shape,  
+        # Shape: (1024, 8) - 1024 visibility flags, 8 frames
+
+        'whole_episode_tracks': sample_trajectory['whole_episode_tracks'].shape,  
+        # Shape: (1024, 16, 2) - 1024 points, 16 frames, 2D coordinates
+
+        'whole_episode_visibles': sample_trajectory['whole_episode_visibles'].shape  
+        # Shape: (1024, 16) - 1024 visibility flags, 16 frames
     }
 
     trajectory_dataset = tf.data.Dataset.from_generator(
