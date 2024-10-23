@@ -1,5 +1,8 @@
 from pathlib import Path
 import numpy as np
+import torch
+
+
 def construct_episode_label(episode):
     episode_id = int(episode['episode_metadata']['episode_id'].numpy())
     episode_fp = episode['episode_metadata']['file_path'].numpy().decode('utf-8')
@@ -95,3 +98,23 @@ def create_action_bins(action_space_low, action_space_high, num_bins):
         bins = np.linspace(low, high, num_bins + 1)[1:-1]  # Exclude the first and last edges
         action_bins.append(bins)
     return np.array(action_bins)
+
+def track_memory(prefix, device='cuda:0', long=False, track_flag = False):
+    """Helper function to print memory summary after synchronization.
+
+    Args:
+        prefix (str): Descriptive prefix for the memory summary.
+        device (str): Device to check memory usage for (default is 'cuda:0').
+        long (bool): If True, prints the full memory summary; if False, prints only allocated memory. 
+    """
+    if not track_flag:
+        return
+    torch.cuda.synchronize(device)  # Synchronize to ensure all operations are complete
+    if long:
+        print(f"\n==== {prefix} ====")
+        print(torch.cuda.memory_summary(device=device))
+    else:
+        allocated = torch.cuda.memory_allocated(device) / (1024 ** 2)  # Convert to MB
+        max_reserved = torch.cuda.max_memory_reserved() / 1024**2
+        print(f"{prefix}: max allocated {allocated:.2f} MB")
+        print(f"{prefix}: max reserved {max_reserved:.2f} MiB")

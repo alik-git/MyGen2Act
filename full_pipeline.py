@@ -22,6 +22,7 @@ from src.vit_ft_extractor import VideoFeatureExtractor
 from src.perceiver_resampler import PerceiverResampler
 from src.track_pred_transformer import TrackPredictionTransformer
 
+from src.utils import track_memory
 
 # Helper functions
 def preprocess_frames(frames, device, resize_height=224, resize_width=224):
@@ -111,7 +112,7 @@ def process_video(frames, tracks, device, feature_extractor, perceiver_resampler
     return z, i0, P0_normalized_tensor, predicted_tracks, gt_tracks_normalized_tensor
 
 
-def main(bridge_data_path, tracks_dir, device='cuda:0', batch_size=1):
+def main(bridge_data_path, tracks_dir, device='cuda:0', batch_size=1, track_memory_flag=False):
     """
     Main function to build the dataset and run the video processing pipeline.
 
@@ -137,20 +138,29 @@ def main(bridge_data_path, tracks_dir, device='cuda:0', batch_size=1):
         batch_size=batch_size
     )
 
-    # Initialize models
+    # Initialize models with memory profiling
+    track_memory("Before initializing models", device, track_flag=track_memory_flag)
+
+    # Feature Extractor
+    
     feature_extractor = VideoFeatureExtractor(device=device)
+
+    # Perceiver Resampler
     perceiver_resampler = PerceiverResampler(
         dim=768, num_latents=64, depth=2, heads=8, dim_head=64, ff_mult=4
     ).to(device)
 
+    # Track Prediction Transformer for generated video
     gen_video_track_predictor = TrackPredictionTransformer(
         point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=16
     ).to(device)
+
+    # Track Prediction Transformer for robot video
     robot_video_track_predictor = TrackPredictionTransformer(
         point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=8
     ).to(device)
 
-    # Initialize ActionPredictionTransformer
+    # Action Prediction Transformer
     action_predictor = ActionPredictionTransformer(
         hidden_dim=768,
         num_encoder_layers=6,
@@ -161,6 +171,8 @@ def main(bridge_data_path, tracks_dir, device='cuda:0', batch_size=1):
         num_bins=256,
         dropout=0.1
     ).to(device)
+    track_memory("After initializing models", device, track_flag=track_memory_flag)
+
 
     # Loss function for action prediction
     action_criterion = nn.CrossEntropyLoss()
@@ -276,6 +288,8 @@ if __name__ == "__main__":
                         help='Device to use, e.g., cuda:0, cuda:1, or cpu (default: cuda:0)')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for processing trajectories (default: 1)')
+    parser.add_argument('--track_memory_flag', type=bool, default=False,
+                        help='Track memory usage (default: False)')
     args = parser.parse_args()
 
-    main(bridge_data_path=args.bridge_data_path, tracks_dir=args.tracks_dir, device=args.device, batch_size=args.batch_size)
+    main(bridge_data_path=args.bridge_data_path, tracks_dir=args.tracks_dir, device=args.device, batch_size=args.batch_size, track_memory_flag=args.track_memory_flag)
