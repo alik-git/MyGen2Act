@@ -1,4 +1,6 @@
-# full_pipeline.py
+"""
+python full_pipeline.py --bridge_data_path /nfs/scratch/pawel/octo/octo/bridge_dataset/1.0.0/
+"""
 
 import torch
 import torch.nn as nn
@@ -19,6 +21,7 @@ from src.data_loader import build_dataset
 from src.vit_ft_extractor import VideoFeatureExtractor
 from src.perceiver_resampler import PerceiverResampler
 from src.track_pred_transformer import TrackPredictionTransformer
+
 
 # Helper functions
 def preprocess_frames(frames, device, resize_height=224, resize_width=224):
@@ -50,6 +53,7 @@ def preprocess_frames(frames, device, resize_height=224, resize_width=224):
     frames = frames.view(batch_size, num_frames, 3, resize_height, resize_width)
 
     return frames  # torch tensor
+
 
 def process_video(frames, tracks, device, feature_extractor, perceiver_resampler, gen_video_track_predictor, robot_video_track_predictor, action_predictor, video_type='generated'):
     """
@@ -105,6 +109,7 @@ def process_video(frames, tracks, device, feature_extractor, perceiver_resampler
         predicted_tracks = robot_video_track_predictor(P0_normalized_tensor, i0, z)
 
     return z, i0, P0_normalized_tensor, predicted_tracks, gt_tracks_normalized_tensor
+
 
 def main(bridge_data_path, device='cuda:0', batch_size=1):
     # Build the dataset
@@ -239,10 +244,10 @@ def main(bridge_data_path, device='cuda:0', batch_size=1):
 
         print(f"Batch {batch_idx + 1} - Total Loss: {total_loss.item():.4f}, Action Loss: {action_loss.item():.4f}")
 
-
         # Break after a few batches for demonstration purposes
         if batch_idx >= 9:
             break
+
 
 if __name__ == "__main__":
     # Parse command-line arguments

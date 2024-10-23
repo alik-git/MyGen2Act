@@ -15,41 +15,41 @@ sudo apt-get -y install cuda-toolkit-12-6
 ```
 
 ### Install the point tracking repo
-
-Follow the instructions on their readme [here](https://github.com/google-deepmind/tapnet). We need the PyTorch version of the "BootsTAPIR" model, so download the checkpoint for that [here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt).
+We need the PyTorch version of the "BootsTAPIR" model, so download the checkpoint for that [here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt).
+```
+mkdir checkpoints
+wget -P checkpoints https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt
+```
+For more details, follow the instructions on their readme [here](https://github.com/google-deepmind/tapnet).
 
 ### Setup conda env
-
-
 Follow these steps to create and set up a Conda environment for this project.
 
 ```bash
 conda create -n gen2act python=3.10 -y
 conda activate gen2act
-# git clone the repo
-# cd to the repo root
+git clone https://github.com/alik-ai/MyGen2Act.git
+cd MyGen2Act
 pip install -r requirements.txt
 ```
 
-### Downlaod the bridge dataset
+### Download the bridge dataset
 
 Follow the instructions for that from their [website](https://github.com/rail-berkeley/bridge_data_v2) 
 
 # Usage
 
 ### First compute the point tracking
-
 Use the `pt_tracker.py` file for this. Replace the paths to match yours 
 
 ```bash
-python src/pt_tracker.py --bridge_data_path /home/kasm-user/alik_local_data/bridge_dataset/1.0.0 \
---model_checkpoint_fp /home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt
+python src/pt_tracker.py --bridge_data_path /nfs/scratch/pawel/octo/octo/bridge_dataset/1.0.0 \
+    --model_checkpoint_fp checkpoints/bootstapir_checkpoint_v2.pt
 ``` 
 
 This will save point tracking files in the `.npz` format in the same location as your bridge dataset.
 
 ### Full loop
-
 Just run the `full_pipeline.py` with the path to the bridge dataset. So far I have stuff implmented all the way up until the auxiliary loss for the each of the videos. Also since I haven't yet figured out how to generate the video, I just make a copy of the robot video and pretend its a generated video.
 
 NOTE: this will fail unless you have the saved tracks for the video already. 
