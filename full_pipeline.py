@@ -1,3 +1,5 @@
+# full_pipeline.py
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -11,6 +13,7 @@ import argparse
 from pathlib import Path
 
 # Import build_dataset from data_loader.py
+from src.action_prediction_transformer import ActionPredictionTransformer
 from src.data_loader import build_dataset
 
 from src.vit_ft_extractor import VideoFeatureExtractor
@@ -48,7 +51,7 @@ def preprocess_frames(frames, device, resize_height=224, resize_width=224):
 
     return frames  # torch tensor
 
-def process_video(frames, tracks, device, feature_extractor, perceiver_resampler, track_predictor, video_type='generated'):
+def process_video(frames, tracks, device, feature_extractor, perceiver_resampler, gen_video_track_predictor, robot_video_track_predictor, action_predictor, video_type='generated'):
     """
     Process a batch of videos through ViT, Perceiver Resampler, and Track Prediction Transformer.
     Returns the latent tokens, initial ViT features, initial points, and predicted tracks.
@@ -94,16 +97,14 @@ def process_video(frames, tracks, device, feature_extractor, perceiver_resampler
     gt_tracks_normalized = tracks / np.array([img_width, img_height])
     gt_tracks_normalized_tensor = torch.tensor(gt_tracks_normalized, device=device).float()
 
-    # Initialize TrackPredictionTransformer if not already
-    if track_predictor is None or track_predictor.num_frames != num_frames_processed:
-        track_predictor = TrackPredictionTransformer(
-            point_dim=2, hidden_dim=hidden_dim, num_layers=6, num_heads=8, num_frames=num_frames_processed
-        ).to(device)
-
     # Predict tracks τ̂
-    predicted_tracks = track_predictor(P0_normalized_tensor, i0, z)  # [batch_size, num_points, num_frames, 2]
+    predicted_tracks = None
+    if video_type == 'generated':       
+        predicted_tracks = gen_video_track_predictor(P0_normalized_tensor, i0, z)  # [batch_size, num_points, num_frames, 2]
+    elif video_type == 'robot':
+        predicted_tracks = robot_video_track_predictor(P0_normalized_tensor, i0, z)
 
-    return z, i0, P0_normalized_tensor, predicted_tracks, gt_tracks_normalized_tensor, track_predictor
+    return z, i0, P0_normalized_tensor, predicted_tracks, gt_tracks_normalized_tensor
 
 def main(bridge_data_path, device='cuda:0', batch_size=1):
     # Build the dataset
@@ -120,7 +121,31 @@ def main(bridge_data_path, device='cuda:0', batch_size=1):
     perceiver_resampler = PerceiverResampler(
         dim=768, num_latents=64, depth=2, heads=8, dim_head=64, ff_mult=4
     ).to(device)
-    track_predictor = None  # Will initialize in process_video based on num_frames
+
+    gen_video_track_predictor = TrackPredictionTransformer(
+        point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=16
+    ).to(device)
+    robot_video_track_predictor = TrackPredictionTransformer(
+        point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=8
+    ).to(device)
+
+    # Initialize ActionPredictionTransformer
+    action_predictor = ActionPredictionTransformer(
+        hidden_dim=768,
+        num_encoder_layers=6,
+        num_decoder_layers=6,
+        num_heads=8,
+        action_dim=7,  # As per your action dimensions
+        num_future_actions=4,  # Predict next 4 actions
+        num_bins=256,
+        dropout=0.1
+    ).to(device)
+
+    # Loss function for action prediction
+    action_criterion = nn.CrossEntropyLoss()
+
+    # Optimizer
+    optimizer = torch.optim.Adam(action_predictor.parameters(), lr=1e-4)
 
     # Iterate through the batches
     for batch_idx, batch in enumerate(trajectories):
@@ -137,8 +162,18 @@ def main(bridge_data_path, device='cuda:0', batch_size=1):
         tracks_robot = batch['trajectory_tracks'].numpy()  # shape: (batch_size, num_points, num_frames_robot, 2)
 
         # Process generated video
-        z_g, i0_g, P0_g, predicted_tracks_g, gt_tracks_g, track_predictor = process_video(
-            generated_frames, tracks_whole_episode, device, feature_extractor, perceiver_resampler, track_predictor, video_type='generated'
+        z_g, i0_g, P0_g, predicted_tracks_g, gt_tracks_g = (
+            process_video(
+                generated_frames,
+                tracks_whole_episode,
+                device,
+                feature_extractor,
+                perceiver_resampler,
+                gen_video_track_predictor,
+                robot_video_track_predictor,
+                action_predictor,
+                video_type="generated",
+            )
         )
 
         # Compute auxiliary loss for generated video
@@ -146,8 +181,18 @@ def main(bridge_data_path, device='cuda:0', batch_size=1):
         print(f"Auxiliary loss for generated video: {aux_loss_g.item()}")
 
         # Process robot video
-        z_r, i0_r, P0_r, predicted_tracks_r, gt_tracks_r, track_predictor = process_video(
-            robot_frames, tracks_robot, device, feature_extractor, perceiver_resampler, track_predictor, video_type='robot'
+        z_r, i0_r, P0_r, predicted_tracks_r, gt_tracks_r = (
+            process_video(
+                robot_frames,
+                tracks_robot,
+                device,
+                feature_extractor,
+                perceiver_resampler,
+                gen_video_track_predictor,
+                robot_video_track_predictor,
+                action_predictor,
+                video_type="robot",
+            )
         )
 
         # Compute auxiliary loss for robot video
@@ -157,12 +202,47 @@ def main(bridge_data_path, device='cuda:0', batch_size=1):
         # Combine auxiliary losses
         total_aux_loss = 0
         total_aux_loss += aux_loss_g
-        total_aux_loss += aux_loss_r
+        # total_aux_loss += aux_loss_r
         print(f"Total auxiliary loss: {total_aux_loss.item()}")
+        
+        # for now initialize z_g and z_r with random values
+        
+        
+        
+        # Predict actions
+        action_logits = action_predictor(z_g, z_r)  # [batch_size, num_future_actions, action_dim, num_bins]
+
+        # Ground truth actions
+        gt_actions = batch['next_actions'].numpy()  # [batch_size, num_future_actions, action_dim]
+        gt_actions = torch.tensor(gt_actions, device=device).float()
+
+        # Discretize actions
+        action_min = torch.tensor([-0.1791, -0.2553, -0.0681, -0.4487, -0.3450, -6.2708, 0.0], device=device)
+        action_max = torch.tensor([0.1117, 0.2004, 0.1396, 0.5934, 0.3536, 6.2598, 1.0], device=device)
+
+        gt_actions_normalized = (gt_actions - action_min) / (action_max - action_min)
+        gt_actions_normalized = torch.clamp(gt_actions_normalized, 0.0, 1.0)
+        gt_actions_discrete = (gt_actions_normalized * (action_predictor.num_bins - 1)).long()
+
+        # Compute action prediction loss
+        action_logits_flat = action_logits.view(-1, action_predictor.num_bins)
+        gt_actions_flat = gt_actions_discrete.view(-1)
+        action_loss = action_criterion(action_logits_flat, gt_actions_flat)
+
+        # Total loss
+        total_loss = total_aux_loss + action_loss
+
+        # Backpropagation
+        optimizer.zero_grad()
+        total_loss.backward()
+        optimizer.step()
+
+        print(f"Batch {batch_idx + 1} - Total Loss: {total_loss.item():.4f}, Action Loss: {action_loss.item():.4f}")
+
 
         # Break after a few batches for demonstration purposes
-        # if batch_idx >= 9:
-        #     break
+        if batch_idx >= 9:
+            break
 
 if __name__ == "__main__":
     # Parse command-line arguments
@@ -171,7 +251,7 @@ if __name__ == "__main__":
                         help='Path to the bridge dataset directory.')
     parser.add_argument('--device', type=str, default='cuda:0',
                         help='Device to use, e.g., cuda:0, cuda:1, or cpu (default: cuda:0)')
-    parser.add_argument('--batch_size', type=int, default=2,
+    parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for processing trajectories (default: 1)')
     args = parser.parse_args()
 

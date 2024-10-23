@@ -56,3 +56,42 @@ def get_sample_indices(total_frames, num_frames_to_sample, last_frames=False):
         sampled_indices = sorted(set(sampled_indices))
 
     return sampled_indices
+
+def discretize_actions(actions, action_bins):
+    """
+    Discretize continuous actions into bins.
+
+    Args:
+        actions: [batch_size, num_actions, action_dim] - Continuous actions.
+        action_bins: [action_dim, num_bins] - Bins for each action dimension.
+
+    Returns:
+        discretized_actions: [batch_size, num_actions, action_dim] - Discrete action indices.
+    """
+    batch_size, num_actions, action_dim = actions.shape
+    discretized_actions = np.zeros((batch_size, num_actions, action_dim), dtype=np.int64)
+
+    for d in range(action_dim):
+        # For each action dimension, digitize the actions
+        bins = action_bins[d]
+        discretized_actions[:, :, d] = np.digitize(actions[:, :, d], bins) - 1  # Subtract 1 to get zero-based indices
+
+    return discretized_actions
+
+def create_action_bins(action_space_low, action_space_high, num_bins):
+    """
+    Create bins for discretizing actions.
+
+    Args:
+        action_space_low: [action_dim,] - Lower bounds of action dimensions.
+        action_space_high: [action_dim,] - Upper bounds of action dimensions.
+        num_bins: int - Number of bins per dimension.
+
+    Returns:
+        action_bins: [action_dim, num_bins] - Bins for each action dimension.
+    """
+    action_bins = []
+    for low, high in zip(action_space_low, action_space_high):
+        bins = np.linspace(low, high, num_bins + 1)[1:-1]  # Exclude the first and last edges
+        action_bins.append(bins)
+    return np.array(action_bins)
