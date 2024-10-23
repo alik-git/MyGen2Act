@@ -22,8 +22,8 @@ Follow these steps to create and set up a Conda environment for this project.
 ```bash
 conda create -n gen2act python=3.10 -y
 conda activate gen2act
-# git clone the repo
-# cd to the repo root
+git clone https://github.com/alik-ai/MyGen2Act.git
+cd MyGen2Act
 pip install -r requirements.txt
 ```
 
@@ -34,30 +34,28 @@ Tapnet should automatically downlaod from the `requirements.txt` file, but if it
 But you still need to download the model checkpoint (PyTorch version of the "BootsTAPIR" model), link [here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt), wget command below. 
 
 ```bash
-# cd to the repo root
-cd model_checkpoints
-wget -c --progress=bar:force https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt -O bootstapir_checkpoint_v2.pt
+# cd to repo root
+mkdir checkpoints
+wget -P checkpoints https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt
 ```
 
-### Downlaod the bridge dataset
+### Download the bridge dataset
 
 Follow the instructions for that from their [website](https://github.com/rail-berkeley/bridge_data_v2) 
 
 # Usage
 
 ### First compute the point tracking
-
 Use the `pt_tracker.py` file for this. Replace the paths to match yours 
 
 ```bash
-python src/pt_tracker.py --bridge_data_path /home/kasm-user/alik_local_data/bridge_dataset/1.0.0 \
---model_checkpoint_fp /home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt
+python src/pt_tracker.py --bridge_data_path /nfs/scratch/pawel/octo/octo/bridge_dataset/1.0.0 \
+    --model_checkpoint_fp checkpoints/bootstapir_checkpoint_v2.pt
 ``` 
 
 This will save point tracking files in the `.npz` format in the same location as your bridge dataset.
 
 ### Full loop
-
 Just run the `full_pipeline.py` with the path to the bridge dataset. So far I have stuff implmented all the way up until the auxiliary loss for the each of the videos. Also since I haven't yet figured out how to generate the video, I just make a copy of the robot video and pretend its a generated video.
 
 NOTE: this will fail unless you have the saved tracks for the video already. 
