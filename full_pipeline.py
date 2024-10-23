@@ -2,175 +2,177 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
-import mediapy as media
 import numpy as np
-import tensorflow_datasets as tfds
+import tensorflow as tf
 
 import os
 
 import argparse
 from pathlib import Path
-from PIL import Image
+
+# Import build_dataset from data_loader.py
+from src.data_loader import build_dataset
 
 from src.vit_ft_extractor import VideoFeatureExtractor
 from src.perceiver_resampler import PerceiverResampler
 from src.track_pred_transformer import TrackPredictionTransformer
 
-from src.utils import construct_episode_label
-from src.utils import get_sample_indices
-
 # Helper functions
-def preprocess_frames(frames, resize_height=224, resize_width=224):
+def preprocess_frames(frames, device, resize_height=224, resize_width=224):
     """
-    Preprocess a list of frames: resize and normalize.
+    Preprocess frames: resize and normalize.
+    frames: numpy array of shape (batch_size, num_frames, H, W, C)
+    Returns: torch tensor of shape (batch_size, num_frames, 3, resize_height, resize_width)
     """
-    transform = T.Compose([
-        T.Resize((resize_height, resize_width)),
-        T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    processed_frames = [transform(frame).numpy() for frame in frames]
-    return processed_frames
+    batch_size, num_frames, H, W, C = frames.shape
 
-def load_tracking_results(tracks_path, visibles_path):
-    """
-    Load tracks and visibles from .npz files.
-    """
-    tracks = np.load(tracks_path)['tracks']
-    visibles = np.load(visibles_path)['visibles']
-    print(f"Tracks loaded from: {tracks_path}")
-    print(f"Visibles loaded from: {visibles_path}")
-    return tracks, visibles
+    # Flatten batch and time dimensions
+    frames = frames.reshape(-1, H, W, C)  # shape: (batch_size * num_frames, H, W, C)
 
-def process_video(frames, tracks, sampled_indices, device, video_type='generated'):
+    # Convert to torch tensor and normalize to [0, 1]
+    frames = torch.from_numpy(frames).float().div(255).to(device)  # shape: (batch_size * num_frames, H, W, C)
+
+    # Permute to (batch_size * num_frames, C, H, W)
+    frames = frames.permute(0, 3, 1, 2)  # shape: (batch_size * num_frames, C, H, W)
+
+    # Resize
+    frames = torch.nn.functional.interpolate(frames, size=(resize_height, resize_width), mode='bilinear', align_corners=False)
+
+    # Normalize
+    mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
+    frames = (frames - mean) / std
+
+    # Reshape back to (batch_size, num_frames, 3, resize_height, resize_width)
+    frames = frames.view(batch_size, num_frames, 3, resize_height, resize_width)
+
+    return frames  # torch tensor
+
+def process_video(frames, tracks, device, feature_extractor, perceiver_resampler, track_predictor, video_type='generated'):
     """
-    Process a video through ViT, Perceiver Resampler, and Track Prediction Transformer.
+    Process a batch of videos through ViT, Perceiver Resampler, and Track Prediction Transformer.
     Returns the latent tokens, initial ViT features, initial points, and predicted tracks.
+    frames: numpy array of shape (batch_size, num_frames, H, W, C)
+    tracks: numpy array of shape (batch_size, num_points, num_frames, 2)
     """
-    # Preprocess frames
-    processed_frames = preprocess_frames(frames)
-    print(f"Processed {video_type} video frames: {len(processed_frames)} frames")
+    batch_size, num_frames_processed, H, W, C = frames.shape
+    num_points = tracks.shape[1]
 
-    # Initialize the ViT feature extractor
-    feature_extractor = VideoFeatureExtractor(device=device)
+    # Preprocess frames
+    processed_frames = preprocess_frames(frames, device)  # shape: (batch_size, num_frames, 3, H', W')
+    print(f"Processed {video_type} video frames: {processed_frames.shape}")
 
     # Extract features from video frames
-    features = feature_extractor.extract_features(
-        processed_frames, sampled_indices=sampled_indices
-    )
-    features = features[0] # Shape: [1, num_frames, num_tokens, hidden_dim]
-    features = torch.tensor(features, device=device, dtype=torch.float32)
+    features = feature_extractor.extract_features(processed_frames)
+    # features: shape (batch_size, num_frames, num_tokens, hidden_dim)
     print(f"{video_type.capitalize()} video features shape: {features.shape}")
 
     # Extract initial ViT features (from the first frame)
-    i0 = features[0].unsqueeze(0)  # Shape: [1, num_tokens, hidden_dim]
+    i0 = features[:, 0, :, :]  # Shape: [batch_size, num_tokens, hidden_dim]
 
     # Flatten features for PerceiverResampler
-    num_frames_processed, num_tokens, hidden_dim = features.shape
+    batch_size, num_frames_processed, num_tokens, hidden_dim = features.shape
     seq_len = num_frames_processed * num_tokens
-    features_flat = features.view(1, seq_len, hidden_dim)  # Shape: [1, seq_len, hidden_dim]
+    features_flat = features.view(batch_size, -1, hidden_dim)  # Flatten frames and tokens
 
-    # Initialize PerceiverResampler
-    perceiver_resampler = PerceiverResampler(
-        dim=hidden_dim, num_latents=64, num_layers=2, num_heads=8, dim_head=64, ff_mult=4
-    ).to(device)
 
     # Pass features through PerceiverResampler
-    z = perceiver_resampler(features_flat)  # Shape: [1, num_latents, hidden_dim]
+    z = perceiver_resampler(features_flat)  # Shape: [batch_size, num_latents, hidden_dim]
     print(f"{video_type.capitalize()} video latent tokens shape: {z.shape}")
 
     # Prepare initial points P0
-    num_points = tracks.shape[0]  # Number of points
-    P0 = tracks[:, sampled_indices[0], :]  # Shape: [num_points, 2]
+    P0 = tracks[:, :, 0, :]  # Shape: [batch_size, num_points, 2]
+
     # Normalize coordinates to be between 0 and 1
-    img_height, img_width = frames[0].size[1], frames[0].size[0]
+    img_height, img_width = frames.shape[2], frames.shape[3]
     P0_normalized = P0 / np.array([img_width, img_height])
-    P0_normalized = torch.tensor(P0_normalized, device=device).float().unsqueeze(0)  # [1, num_points, 2]
+
+    # Convert to PyTorch tensor
+    P0_normalized_tensor = torch.tensor(P0_normalized, device=device).float()
 
     # Prepare ground truth tracks τ
-    gt_tracks = tracks[:, sampled_indices, :]  # [num_points, num_frames_processed, 2]
-    gt_tracks_normalized = gt_tracks / np.array([img_width, img_height])
-    gt_tracks_normalized = torch.tensor(gt_tracks_normalized, device=device).float().unsqueeze(0)
+    gt_tracks_normalized = tracks / np.array([img_width, img_height])
+    gt_tracks_normalized_tensor = torch.tensor(gt_tracks_normalized, device=device).float()
 
-    # Initialize TrackPredictionTransformer
-    track_predictor = TrackPredictionTransformer(
-        point_dim=2, hidden_dim=hidden_dim, num_layers=6, num_heads=8, num_frames=num_frames_processed
-    ).to(device)
+    # Initialize TrackPredictionTransformer if not already
+    if track_predictor is None or track_predictor.num_frames != num_frames_processed:
+        track_predictor = TrackPredictionTransformer(
+            point_dim=2, hidden_dim=hidden_dim, num_layers=6, num_heads=8, num_frames=num_frames_processed
+        ).to(device)
 
     # Predict tracks τ̂
-    predicted_tracks = track_predictor(P0_normalized, i0, z)  # [1, num_points, num_frames_processed, 2]
+    predicted_tracks = track_predictor(P0_normalized_tensor, i0, z)  # [batch_size, num_points, num_frames, 2]
 
-    return z, i0, P0_normalized, predicted_tracks, gt_tracks_normalized
+    return z, i0, P0_normalized_tensor, predicted_tracks, gt_tracks_normalized_tensor, track_predictor
 
-def main(bridge_data_path, device='cuda:0'):
-    # Load the dataset
-    dataset_builder = tfds.builder_from_directory(bridge_data_path)
-    dataset = dataset_builder.as_dataset(split='train[:10]')
+def main(bridge_data_path, device='cuda:0', batch_size=1):
+    # Build the dataset
+    trajectories = build_dataset(
+        bridge_data_path,
+        trajectory_length=8,
+        next_actions_length=4,
+        split='train[:10]',
+        batch_size=batch_size
+    )
 
-    # Loop over each episode in the dataset
-    for episode_idx, episode in enumerate(dataset):
-        print(f"\nProcessing episode {episode_idx + 1}")
+    # Initialize models
+    feature_extractor = VideoFeatureExtractor(device=device)
+    perceiver_resampler = PerceiverResampler(
+        dim=768, num_latents=64, depth=2, heads=8, dim_head=64, ff_mult=4
+    ).to(device)
+    track_predictor = None  # Will initialize in process_video based on num_frames
 
-        # Get images from the episode
-        images = [step['observation']['image_0'] for step in episode['steps']]
-        images = [Image.fromarray(image.numpy()) for image in images]
-        print(f"Number of frames in episode: {len(images)}")
+    # Iterate through the batches
+    for batch_idx, batch in enumerate(trajectories):
+        print(f"\nProcessing batch {batch_idx + 1}")
 
-        # Create generated video (copy of robot video for now)
-        generated_frames = images.copy()
-        robot_frames = images.copy()
+        # Get images from the batch
+        # For generated video (whole_episode_images)
+        generated_frames = batch['whole_episode_images'].numpy()  # shape: (batch_size, num_frames_gen, H, W, C)
+        # For robot video (trajectory_images)
+        robot_frames = batch['trajectory_images'].numpy()  # shape: (batch_size, num_frames_robot, H, W, C)
 
-        # Load tracking results (assumes tracks are saved per episode)
-        episode_label = construct_episode_label(episode)
-        tracks_path = f"{bridge_data_path}/{episode_label}_tracks.npz"
-        visibles_path = f"{bridge_data_path}/{episode_label}_visibles.npz"
-
-        if not os.path.exists(tracks_path) or not os.path.exists(visibles_path):
-            print(f"Tracking results not found for episode {episode_label}, skipping...")
-            continue
-
-        tracks, visibles = load_tracking_results(tracks_path, visibles_path)
+        # Get tracks
+        tracks_whole_episode = batch['whole_episode_tracks'].numpy()  # shape: (batch_size, num_points, num_frames_gen, 2)
+        tracks_robot = batch['trajectory_tracks'].numpy()  # shape: (batch_size, num_points, num_frames_robot, 2)
 
         # Process generated video
-        # Sample 16 frames, ensuring first and last frames are included
-        total_frames_gen = len(generated_frames)
-        sampled_indices_gen = get_sample_indices(total_frames_gen, num_frames_to_sample=16, last_frames=False)
-        z_g, i0_g, P0_g, predicted_tracks_g, gt_tracks_g = process_video(
-            generated_frames, tracks, sampled_indices_gen, device, video_type='generated'
+        z_g, i0_g, P0_g, predicted_tracks_g, gt_tracks_g, track_predictor = process_video(
+            generated_frames, tracks_whole_episode, device, feature_extractor, perceiver_resampler, track_predictor, video_type='generated'
         )
 
         # Compute auxiliary loss for generated video
         aux_loss_g = F.mse_loss(predicted_tracks_g, gt_tracks_g)
         print(f"Auxiliary loss for generated video: {aux_loss_g.item()}")
 
-        # # Process robot video
-        # # Get the last 8 frames
-        total_frames_robot = len(robot_frames)
-        sampled_indices_robot = get_sample_indices(total_frames_robot, num_frames_to_sample=8, last_frames=True)
-        z_r, i0_r, P0_r, predicted_tracks_r, gt_tracks_r = process_video(
-            robot_frames, tracks, sampled_indices_robot, device, video_type='robot'
+        # Process robot video
+        z_r, i0_r, P0_r, predicted_tracks_r, gt_tracks_r, track_predictor = process_video(
+            robot_frames, tracks_robot, device, feature_extractor, perceiver_resampler, track_predictor, video_type='robot'
         )
 
         # Compute auxiliary loss for robot video
         aux_loss_r = F.mse_loss(predicted_tracks_r, gt_tracks_r)
         print(f"Auxiliary loss for robot video: {aux_loss_r.item()}")
 
-        # TODO: Combine auxiliary losses and proceed with behavior cloning loss
-        # For now, we can simply sum them as per the paper (during training)
-        total_aux_loss = aux_loss_g  + aux_loss_r
+        # Combine auxiliary losses
+        total_aux_loss = 0
+        total_aux_loss += aux_loss_g
+        total_aux_loss += aux_loss_r
         print(f"Total auxiliary loss: {total_aux_loss.item()}")
 
-        # Break after a few episodes for demonstration purposes
-        if episode_idx >= 9:
-            break
+        # Break after a few batches for demonstration purposes
+        # if batch_idx >= 9:
+        #     break
 
 if __name__ == "__main__":
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description='Run video processing with specified GPU.')
+    parser = argparse.ArgumentParser(description='Run video processing with specified GPU and batch size.')
     parser.add_argument('--bridge_data_path', type=str, default="/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/",
                         help='Path to the bridge dataset directory.')
     parser.add_argument('--device', type=str, default='cuda:0',
                         help='Device to use, e.g., cuda:0, cuda:1, or cpu (default: cuda:0)')
+    parser.add_argument('--batch_size', type=int, default=2,
+                        help='Batch size for processing trajectories (default: 1)')
     args = parser.parse_args()
 
-    main(bridge_data_path=args.bridge_data_path, device=args.device)
+    main(bridge_data_path=args.bridge_data_path, device=args.device, batch_size=args.batch_size)

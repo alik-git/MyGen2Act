@@ -20,29 +20,34 @@ class VideoFeatureExtractor:
         pixel_values = inputs['pixel_values'].to(self.device)
         return pixel_values
 
-    def extract_features(self, video_frames, sampled_indices):
+    def extract_features(self, video_frames, sampled_indices=None):
         """
         Extracts features from the specified sampled indices of the video frames.
 
         Args:
-        - video_frames: List of frames from the video.
+        - video_frames: Torch tensor of shape (batch_size, num_frames, 3, H, W).
         - sampled_indices: List of indices indicating which frames to process.
 
         Returns:
-        - features: Numpy array of extracted features from the sampled frames.
-        - sampled_indices: The same input sampled indices, returned for consistency.
+        - features: Torch tensor of shape (batch_size, num_frames, num_tokens, hidden_dim).
         """
+        batch_size, num_frames, _, _, _ = video_frames.shape
+
         # Ensure sampled indices are within the range of available frames
-        num_frames = len(video_frames)
-        sampled_indices = [idx for idx in sampled_indices if 0 <= idx < num_frames]
+        if sampled_indices is None:
+            sampled_indices = list(range(num_frames))
+        else:
+            sampled_indices = [idx for idx in sampled_indices if 0 <= idx < num_frames]
 
         features = []
         for idx in sampled_indices:
-            frame = video_frames[idx]
+            frame_batch = video_frames[:, idx, :, :, :]  # shape: (batch_size, 3, H, W)
             with torch.no_grad():
-                pixel_values = self.preprocess_frame(frame)
+                pixel_values = self.preprocess_frame(frame_batch)
                 outputs = self.model(pixel_values)
-                features.append(outputs.last_hidden_state.squeeze(0).cpu().numpy())
+                features.append(outputs.last_hidden_state)  # shape: (batch_size, num_tokens, hidden_dim)
 
-        # Stack all frame features into a single array
-        return np.stack(features), sampled_indices
+        # Stack features along the time dimension
+        features = torch.stack(features, dim=1)  # shape: (batch_size, num_frames, num_tokens, hidden_dim)
+
+        return features

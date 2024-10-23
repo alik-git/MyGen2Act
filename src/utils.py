@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import numpy as np
 def construct_episode_label(episode):
     episode_id = int(episode['episode_metadata']['episode_id'].numpy())
     episode_fp = episode['episode_metadata']['file_path'].numpy().decode('utf-8')
@@ -8,6 +8,16 @@ def construct_episode_label(episode):
     episode_label = f"episode_{episode_id}___{episode_fp_clean}"
     
     return episode_label
+
+def load_tracking_results(tracks_path, visibles_path):
+    """
+    Load tracks and visibles from .npz files.
+    """
+    tracks = np.load(tracks_path)['tracks']
+    visibles = np.load(visibles_path)['visibles']
+    # print(f"Tracks loaded from: {tracks_path}")
+    # print(f"Visibles loaded from: {visibles_path}")
+    return tracks, visibles
 
 
 def get_sample_indices(total_frames, num_frames_to_sample, last_frames=False):
