@@ -8,7 +8,7 @@ import matplotlib.animation as animation
 import os
 from pathlib import Path
 
-from utils import construct_episode_label
+from src.utils import construct_episode_label
 
 # Should look like "path/to/bridge_dataset/1.0.0/"
 bridge_data_path = "/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/"
