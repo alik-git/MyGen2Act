@@ -106,10 +106,26 @@ def process_video(frames, tracks, device, feature_extractor, perceiver_resampler
 
     return z, i0, P0_normalized_tensor, predicted_tracks, gt_tracks_normalized_tensor
 
-def main(bridge_data_path, device='cuda:0', batch_size=1):
+def main(bridge_data_path, tracks_dir, device='cuda:0', batch_size=1):
+    """
+    Main function to build the dataset and run the video processing pipeline.
+
+    Args:
+        bridge_data_path (str): Path to the bridge dataset directory.
+        tracks_dir (str): Path to the point tracks directory.
+        device (str): Device to use (e.g., cuda:0, cuda:1, or cpu).
+        batch_size (int): Batch size for processing trajectories.
+    """
+    print("==== Starting Video Processing Pipeline ====")
+    print(f"Bridge Data Path: {bridge_data_path}")
+    print(f"Tracks Directory: {tracks_dir}")
+    print(f"Device: {device}")
+    print(f"Batch Size: {batch_size}")
+
     # Build the dataset
     trajectories = build_dataset(
-        bridge_data_path,
+        bridge_data_path=bridge_data_path,
+        tracks_dir=tracks_dir,
         trajectory_length=8,
         next_actions_length=4,
         split='train[:10]',
@@ -202,7 +218,7 @@ def main(bridge_data_path, device='cuda:0', batch_size=1):
         # Combine auxiliary losses
         total_aux_loss = 0
         total_aux_loss += aux_loss_g
-        # total_aux_loss += aux_loss_r
+        total_aux_loss += aux_loss_r
         print(f"Total auxiliary loss: {total_aux_loss.item()}")
         
         # for now initialize z_g and z_r with random values
@@ -249,10 +265,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run video processing with specified GPU and batch size.')
     parser.add_argument('--bridge_data_path', type=str, default="/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/",
                         help='Path to the bridge dataset directory.')
+    parser.add_argument('--tracks_dir', type=str, default="/home/alik/MyGen2Act/local_data/point_tracks/",
+                        help='Path to the point tracks directory.')
     parser.add_argument('--device', type=str, default='cuda:0',
                         help='Device to use, e.g., cuda:0, cuda:1, or cpu (default: cuda:0)')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for processing trajectories (default: 1)')
     args = parser.parse_args()
 
-    main(bridge_data_path=args.bridge_data_path, device=args.device, batch_size=args.batch_size)
+    main(bridge_data_path=args.bridge_data_path, tracks_dir=args.tracks_dir, device=args.device, batch_size=args.batch_size)

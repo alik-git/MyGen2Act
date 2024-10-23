@@ -6,7 +6,7 @@ from pathlib import Path
 import mediapy as media
 from tapnet.utils import viz_utils
 
-from utils import construct_episode_label
+from src.utils import construct_episode_label
 
 # Your dataset path
 bridge_data_path = "/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/"

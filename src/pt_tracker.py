@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from tapnet.torch import tapir_model
 from tapnet.utils import transforms
 
-from utils import construct_episode_label
+from src.utils import construct_episode_label
 
 # Check for CUDA availability
 if torch.cuda.is_available():
@@ -66,7 +66,10 @@ def save_tracking_results(tracks, visibles, tracks_output_fp, visibles_output_fp
     np.savez_compressed(visibles_output_fp, visibles=visibles)
     print(f"Visibles saved to: {visibles_output_fp}")
 
-def main(bridge_data_path, model_checkpoint_fp):
+def main(bridge_data_path, model_checkpoint_fp, output_dir):
+    # Ensure the output directory exists
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
     # Load the TAPIR model
     model = tapir_model.TAPIR(pyramid_level=1)
     model.load_state_dict(torch.load(model_checkpoint_fp))
@@ -88,8 +91,9 @@ def main(bridge_data_path, model_checkpoint_fp):
         
         episode_label = construct_episode_label(episode)
 
-        tracks_output_fp = f"{bridge_data_path}/{episode_label}_tracks.npz"
-        visibles_output_fp = f"{bridge_data_path}/{episode_label}_visibles.npz"
+        # Set the output file paths in the specified output directory
+        tracks_output_fp = f"{output_dir}/{episode_label}_tracks.npz"
+        visibles_output_fp = f"{output_dir}/{episode_label}_visibles.npz"
 
         # Sample grid points
         num_points_each_side = 30
@@ -118,6 +122,8 @@ if __name__ == "__main__":
                         help='Path to the bridge dataset directory.')
     parser.add_argument('--model_checkpoint_fp', type=str, default='/home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt',
                         help='Path to the model checkpoint file.')
+    parser.add_argument('--output_dir', type=str, default='/home/alik/MyGen2Act/local_data/point_tracks',
+                        help='Directory to save the point tracking results.')
     args = parser.parse_args()
 
-    main(args.bridge_data_path, args.model_checkpoint_fp)
+    main(args.bridge_data_path, args.model_checkpoint_fp, args.output_dir)

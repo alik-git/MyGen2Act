@@ -14,11 +14,7 @@ sudo apt-get update
 sudo apt-get -y install cuda-toolkit-12-6
 ```
 
-### Install the point tracking repo
-
-Follow the instructions on their readme [here](https://github.com/google-deepmind/tapnet). We need the PyTorch version of the "BootsTAPIR" model, so download the checkpoint for that [here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt).
-
-### Setup conda env
+### Setup conda env and clone repo
 
 
 Follow these steps to create and set up a Conda environment for this project.
@@ -29,6 +25,18 @@ conda activate gen2act
 # git clone the repo
 # cd to the repo root
 pip install -r requirements.txt
+```
+
+### Install the point tracking repo
+
+Tapnet should automatically downlaod from the `requirements.txt` file, but if it doesn't, follow the instructions on their readme [here](https://github.com/google-deepmind/tapnet). 
+
+But you still need to download the model checkpoint (PyTorch version of the "BootsTAPIR" model), link [here](https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt), wget command below. 
+
+```bash
+# cd to the repo root
+cd model_checkpoints
+wget -c --progress=bar:force https://storage.googleapis.com/dm-tapnet/bootstap/bootstapir_checkpoint_v2.pt -O bootstapir_checkpoint_v2.pt
 ```
 
 ### Downlaod the bridge dataset

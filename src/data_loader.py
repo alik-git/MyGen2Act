@@ -1,5 +1,8 @@
 # data_loader.py
 
+import argparse
+import torch
+
 import numpy as np
 import tensorflow_datasets as tfds
 import tensorflow as tf
@@ -8,19 +11,65 @@ from src.utils import construct_episode_label
 from src.utils import load_tracking_results
 
 
-def build_dataset(bridge_data_path, trajectory_length=8, next_actions_length=4, split='train[:10]', batch_size=1):
+def build_dataset(bridge_data_path, tracks_dir, trajectory_length=8, next_actions_length=4, split='train[:10]', batch_size=1):
 
     """
     Builds a tf.data.Dataset of trajectories from the bridge dataset.
 
     Args:
         bridge_data_path (str): Path to the bridge dataset directory.
+        tracks_dir (str): Path to the directory containing point tracking data.
         trajectory_length (int): Length of the trajectory (number of steps).
         next_actions_length (int): Number of future actions to collect as labels.
         split (str): Dataset split to use (default: 'train[:10]').
 
     Returns:
         tf.data.Dataset: A dataset of trajectories.
+        
+    Data Structure Shapes:
+
+    'trajectory_images': (trajectory_length, 256, 256, 3)
+        - Shape: (8, 256, 256, 3) - 8 frames, 256x256 pixels, 3 channels.
+
+    'trajectory_actions': (trajectory_length, 7)
+        - Shape: (8, 7) - 8 steps, 7 action dimensions.
+
+    'next_actions': (next_actions_length, 7)
+        - Shape: (4, 7) - 4 future actions, 7 dimensions.
+
+    'trajectory_discount': (trajectory_length,)
+        - Shape: (8,) - 8 discount values.
+
+    'trajectory_is_first': (trajectory_length,)
+        - Shape: (8,) - 8 boolean flags indicating first step.
+
+    'trajectory_is_last': (trajectory_length,)
+        - Shape: (8,) - 8 boolean flags indicating last step.
+
+    'trajectory_is_terminal': (trajectory_length,)
+        - Shape: (8,) - 8 boolean flags indicating terminal step.
+
+    'language_instruction': scalar string
+        - Shape: scalar string.
+
+    'trajectory_reward': (trajectory_length,)
+        - Shape: (8,) - 8 reward values.
+
+    'whole_episode_images': (16, 256, 256, 3)
+        - Shape: (16, 256, 256, 3) - 16 frames, 256x256 pixels, 3 channels.
+
+    'trajectory_tracks': (1024, trajectory_length, 2)
+        - Shape: (1024, 8, 2) - 1024 points, 8 frames, 2D coordinates.
+
+    'trajectory_visibles': (1024, trajectory_length)
+        - Shape: (1024, 8) - 1024 visibility flags, 8 frames.
+
+    'whole_episode_tracks': (1024, 16, 2)
+        - Shape: (1024, 16, 2) - 1024 points, 16 frames, 2D coordinates.
+
+    'whole_episode_visibles': (1024, 16)
+        - Shape: (1024, 16) - 1024 visibility flags, 16 frames.
+        
     """
     print ("Building dataset")
     # Load the dataset
@@ -105,23 +154,20 @@ def build_dataset(bridge_data_path, trajectory_length=8, next_actions_length=4, 
             trajectory_reward = np.stack(
                 [step['reward'] for step in trajectory_steps], axis=0
             )
-            
-            # Collect preprocessed tracking data
-            tracks_path = f"{bridge_data_path}/{episode_label}_tracks.npz"
-            visibles_path = f"{bridge_data_path}/{episode_label}_visibles.npz"
+
+            # Load point tracking data
+            tracks_path = f"{tracks_dir}/{episode_label}_tracks.npz"
+            visibles_path = f"{tracks_dir}/{episode_label}_visibles.npz"
             
             tracks, visibles = load_tracking_results(tracks_path, visibles_path)
-            
-            # sample the last 8 frames of the tracks and visibles
-            trajectory_tracks = tracks[ : , i:i + trajectory_length, : ]
-            trajectory_visibles = visibles[ : , i:i + trajectory_length]
-            
-            # sample the whole episode tracks and visibles
-            whole_episode_tracks = tracks[ : , episode_sampled_indices, : ]
-            whole_episode_visibles = visibles[ : , episode_sampled_indices ]
-            
-            
-            
+
+            # Sample the last 8 frames of the tracks and visibles
+            trajectory_tracks = tracks[:, i:i + trajectory_length, :]
+            trajectory_visibles = visibles[:, i:i + trajectory_length]
+
+            # Sample the whole episode tracks and visibles
+            whole_episode_tracks = tracks[:, episode_sampled_indices, :]
+            whole_episode_visibles = visibles[:, episode_sampled_indices]
 
             # Create trajectory data
             trajectory = {
@@ -145,7 +191,7 @@ def build_dataset(bridge_data_path, trajectory_length=8, next_actions_length=4, 
             # Add trajectory to the list
             trajectories.append(trajectory)
 
-    # Now, create a tf.data.Dataset from trajectories
+    # Create a tf.data.Dataset from trajectories
     def gen():
         for traj in trajectories:
             yield traj
@@ -168,50 +214,13 @@ def build_dataset(bridge_data_path, trajectory_length=8, next_actions_length=4, 
         'whole_episode_tracks': tf.float64,
         'whole_episode_visibles': tf.bool
     }
+    output_shapes = {}
+    for key, value in sample_trajectory.items():
+        if isinstance(value, bytes):  # Handle string separately
+            output_shapes[key] = tf.TensorShape([])  # Scalar shape for strings
+        else:
+            output_shapes[key] = tf.TensorShape(value.shape)  # Regular shape for tensors/arrays
 
-    output_shapes = {
-        'trajectory_images': sample_trajectory['trajectory_images'].shape,  
-        # Shape: (8, 256, 256, 3) - 8 frames, 256x256 pixels, 3 channels
-
-        'trajectory_actions': sample_trajectory['trajectory_actions'].shape,  
-        # Shape: (8, 7) - 8 steps, 7 action dimensions
-
-        'next_actions': sample_trajectory['next_actions'].shape,  
-        # Shape: (4, 7) - 4 future actions, 7 dimensions
-
-        'trajectory_discount': sample_trajectory['trajectory_discount'].shape,  
-        # Shape: (8,) - 8 discount values
-
-        'trajectory_is_first': sample_trajectory['trajectory_is_first'].shape,  
-        # Shape: (8,) - 8 boolean flags indicating first step
-
-        'trajectory_is_last': sample_trajectory['trajectory_is_last'].shape,  
-        # Shape: (8,) - 8 boolean flags indicating last step
-
-        'trajectory_is_terminal': sample_trajectory['trajectory_is_terminal'].shape,  
-        # Shape: (8,) - 8 boolean flags indicating terminal step
-
-        'language_instruction': tf.TensorShape([]),  
-        # Shape: scalar string
-
-        'trajectory_reward': sample_trajectory['trajectory_reward'].shape,  
-        # Shape: (8,) - 8 reward values
-
-        'whole_episode_images': sample_trajectory['whole_episode_images'].shape,  
-        # Shape: (16, 256, 256, 3) - 16 frames, 256x256 pixels, 3 channels
-
-        'trajectory_tracks': sample_trajectory['trajectory_tracks'].shape,  
-        # Shape: (1024, 8, 2) - 1024 points, 8 frames, 2D coordinates
-
-        'trajectory_visibles': sample_trajectory['trajectory_visibles'].shape,  
-        # Shape: (1024, 8) - 1024 visibility flags, 8 frames
-
-        'whole_episode_tracks': sample_trajectory['whole_episode_tracks'].shape,  
-        # Shape: (1024, 16, 2) - 1024 points, 16 frames, 2D coordinates
-
-        'whole_episode_visibles': sample_trajectory['whole_episode_visibles'].shape  
-        # Shape: (1024, 16) - 1024 visibility flags, 16 frames
-    }
 
     trajectory_dataset = tf.data.Dataset.from_generator(
         gen, output_types=output_types, output_shapes=output_shapes
@@ -227,12 +236,15 @@ def process_data_sample(data_sample):
     """
     pass
 
+
 if __name__ == '__main__':
-    # Define the dataset path
-    bridge_data_path = "/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/"
+    parser = argparse.ArgumentParser(description='Build dataset with point tracking data.')
+    parser.add_argument('--bridge_data_path', type=str, required=True, help='Path to the bridge dataset directory.')
+    parser.add_argument('--tracks_dir', type=str, required=True, help='Path to the directory containing point tracks.')
+    args = parser.parse_args()
 
     # Build the dataset
-    dataset = build_dataset(bridge_data_path)
+    dataset = build_dataset(args.bridge_data_path, args.tracks_dir)
 
     # Iterate through the dataset and process each sample
     for sample in dataset.take(5):  # Limit to 5 samples for demonstration

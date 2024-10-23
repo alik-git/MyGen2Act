@@ -1,5 +1,11 @@
+einops==0.8.0
+einops_exts==0.0.4
 mediapy==1.2.2
 numpy==1.24.4
+Pillow==11.0.0
+tapnet==0.1.0
+tensorflow==2.17.0
+tensorflow_datasets==4.9.6
 torch==2.3.1
 torchvision==0.18.1
 transformers==4.45.2
