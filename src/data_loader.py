@@ -7,6 +7,15 @@ import numpy as np
 import tensorflow_datasets as tfds
 import tensorflow as tf
 
+# Enable dynamic memory growth, otherwise tensorflow hogs the whole dataset on the GPU immediately
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+
 from src.utils import construct_episode_label
 from src.utils import load_tracking_results
 
