@@ -21,7 +21,11 @@ if gpus:
 from src.utils import construct_episode_label
 from src.utils import load_tracking_results
 
+import tqdm
+
 from src.pt_tracker import generate_tracking_files, load_tapir_model
+
+from src.utils import count_episodes
 
 
 def get_sample_indices(num_steps, num_samples=16):
@@ -250,20 +254,30 @@ def build_dataset(bridge_data_path, tracks_dir, tapir_model_checkpoint_fp, traje
     # Load train and validation splits
     train_dataset = dataset_builder.as_dataset(split=train_split)
     val_dataset = dataset_builder.as_dataset(split=val_split)
+    
+    num_train_dataset_episodes = count_episodes(train_dataset)
+    num_val_dataset_episodes = count_episodes(val_dataset)
+    
+    print(f"Number of episodes in the training dataset: {num_train_dataset_episodes}")
+    print(f"Number of episodes in the validation dataset: {num_val_dataset_episodes}")
 
     train_trajectories = []
-    for episode in train_dataset:
-        curr_train_trajectories, tapir_model = process_episode(
-            episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
-        )
-        train_trajectories.extend(curr_train_trajectories)
+    with tqdm.tqdm(total=num_train_dataset_episodes, desc="Processing Training Episodes") as pbar:
+        for train_episode in train_dataset:
+            curr_train_trajectories, tapir_model = process_episode(
+                train_episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
+            )
+            train_trajectories.extend(curr_train_trajectories)
+            pbar.update(1)
 
     val_trajectories = []
-    for episode in val_dataset:
-        curr_val_trajectories, tapir_model = process_episode(
-            episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
-        )
-        val_trajectories.extend(curr_val_trajectories)
+    with tqdm.tqdm(total=num_val_dataset_episodes, desc="Processing Validation Episodes") as pbar:
+        for val_episode in val_dataset:
+            curr_val_trajectories, tapir_model = process_episode(
+                val_episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
+            )
+            val_trajectories.extend(curr_val_trajectories)
+            pbar.update(1)
 
     # Create a tf.data.Dataset from trajectories
     def gen(data):

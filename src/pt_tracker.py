@@ -1,6 +1,6 @@
 import argparse
 import numpy as np
-import tensorflow_datasets as tfds
+
 from PIL import Image
 from pathlib import Path
 
@@ -11,6 +11,22 @@ from tapnet.torch import tapir_model
 from tapnet.utils import transforms
 
 from src.utils import construct_episode_label
+from src.utils import count_episodes
+
+import tqdm
+
+import tensorflow_datasets as tfds
+import tensorflow as tf
+
+
+# Enable dynamic memory growth, otherwise tensorflow hogs the whole dataset on the GPU immediately
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
 
 # Check for CUDA availability
 if torch.cuda.is_available():
@@ -124,7 +140,7 @@ def load_tapir_model(model_checkpoint_fp):
     return model
 
 
-def main(bridge_data_path, model_checkpoint_fp, output_dir, split='train[0:10]'):
+def main(bridge_data_path, model_checkpoint_fp, output_dir, train_split='train', val_split='val'):
     """
     Main function to run point tracking on the dataset.
 
@@ -132,7 +148,8 @@ def main(bridge_data_path, model_checkpoint_fp, output_dir, split='train[0:10]')
     - bridge_data_path (str): Path to the bridge dataset directory.
     - model_checkpoint_fp (str): Path to the model checkpoint file.
     - output_dir (str): Directory to save the point tracking results.
-    - split (str): Dataset split to use for processing (default: 'train[0:10]').
+    - train_split (str): Dataset split to use for training (default: 'train').
+    - val_split (str): Dataset split to use for validation (default: 'val').
     """
     # Ensure the output directory exists
     Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -140,13 +157,40 @@ def main(bridge_data_path, model_checkpoint_fp, output_dir, split='train[0:10]')
     # Load the TAPIR model
     model = load_tapir_model(model_checkpoint_fp)
 
-    # Load the dataset
+    # Initialize dataset builder
     dataset_builder = tfds.builder_from_directory(bridge_data_path)
-    dataset = dataset_builder.as_dataset(split=split)
 
-    # Iterate over episodes and generate tracking files
-    for episode in dataset:
-        generate_tracking_files(episode, model, output_dir)
+    # Determine the number of episodes and what's going to run or skip
+    if train_split is not None:
+        train_dataset = dataset_builder.as_dataset(split=train_split)
+        num_train_dataset_episodes = count_episodes(train_dataset)
+        print(f"Number of episodes in the training dataset: {num_train_dataset_episodes}")
+    else:
+        num_train_dataset_episodes = 0
+        print("Skipping training set...")
+
+    if val_split is not None:
+        val_dataset = dataset_builder.as_dataset(split=val_split)
+        num_val_dataset_episodes = count_episodes(val_dataset)
+        print(f"Number of episodes in the validation dataset: {num_val_dataset_episodes}")
+    else:
+        num_val_dataset_episodes = 0
+        print("Skipping validation set...")
+
+    print("\nStarting processing...\n")
+    # Iterate over training episodes if available
+    if train_split is not None:
+        with tqdm.tqdm(total=num_train_dataset_episodes, desc="Making Train Tracks (choo choo lol)") as pbar:
+            for train_episode in train_dataset:
+                generate_tracking_files(train_episode, model, output_dir)
+                pbar.update(1)
+
+    # Iterate over validation episodes if available
+    if val_split is not None:
+        with tqdm.tqdm(total=num_val_dataset_episodes, desc="Making Val Tracks") as pbar:
+            for val_episode in val_dataset:
+                generate_tracking_files(val_episode, model, output_dir)
+                pbar.update(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Run TAPIR model inference on bridge dataset.')
@@ -156,8 +200,16 @@ if __name__ == "__main__":
                         help='Path to the model checkpoint file.')
     parser.add_argument('--output_dir', type=str, required=True,
                         help='Directory to save the point tracking results.')
-    parser.add_argument('--split', type=str, default='train[0:10]',
-                        help='Dataset split to use for processing (default: "train[0:10]")')
+    parser.add_argument('--train_split', type=str, default='train', nargs='?',
+                        help='Dataset split to use for training (default: "train"). Set to "None" to skip training.')
+    parser.add_argument('--val_split', type=str, default='val', nargs='?',
+                        help='Dataset split to use for validation (default: "val"). Set to "None" to skip validation.')
+
     args = parser.parse_args()
 
-    main(args.bridge_data_path, args.model_checkpoint_fp, args.output_dir, args.split)
+    # Adjusting for 'None' string in splits
+    train_split = None if args.train_split == 'None' else args.train_split
+    val_split = None if args.val_split == 'None' else args.val_split
+
+    main(args.bridge_data_path, args.model_checkpoint_fp, args.output_dir, train_split, val_split)
+

@@ -4,6 +4,10 @@ import torch
 from datetime import datetime
 import json
 
+def count_episodes(dataset):
+    """Counts the number of episodes in the dataset."""
+    return sum(1 for _ in dataset)
+
 def construct_episode_label(episode):
     episode_id = int(episode['episode_metadata']['episode_id'].numpy())
     episode_fp = episode['episode_metadata']['file_path'].numpy().decode('utf-8')

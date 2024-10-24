@@ -70,6 +70,7 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
     # Get total number of batches
     print("counting batches")
     epoch_total_batches = sum(1 for _ in dataloader)
+    print("number of batches: ", epoch_total_batches)
     print("done counting batches")
     
     
@@ -254,8 +255,8 @@ def train_model(
        tapir_model_checkpoint_fp=tapir_model_checkpoint_fp,
        trajectory_length=8,
        next_actions_length=4,
-       train_split='train[:10]',
-       val_split='val[:2]',
+       train_split='train',
+       val_split='val',
        batch_size=batch_size
    )
 
