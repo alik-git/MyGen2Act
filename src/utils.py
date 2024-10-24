@@ -177,7 +177,7 @@ def save_checkpoint(epoch_label, models, optimizer, config, run_logs, save_dir):
     # Save config and run logs using JSON
     serializable_checkpoint = {
         'epoch': epoch_label,
-        'config': tensor_to_primitive(config),
+        'config': tensor_to_primitive(dict(config)),
         'run_logs': tensor_to_primitive(run_logs)
     }
     json_path = save_path / 'checkpoint.json'
