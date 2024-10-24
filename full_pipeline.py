@@ -11,6 +11,8 @@ import numpy as np
 
 import argparse
 
+import wandb
+
 
 from tqdm import tqdm
 
@@ -225,6 +227,19 @@ def train_model(
        device (str): Device to use (e.g., cuda:0, cuda:1, or cpu).
        batch_size (int): Batch size for processing trajectories.
    """
+   # Initialize W&B
+   wandb.init(
+       project='Gen2Act-Training',
+       config={
+           'learning_rate': 1e-4,
+           'batch_size': batch_size,
+           'epochs': epochs,
+           'aux_loss_weight': 200.0,
+           'action_loss_weight': 0.33,
+       }
+   )
+   config = wandb.config  # use W&B config for flexibility
+   
    print("==== Starting Video Processing Pipeline ====")
    print(f"Bridge Data Path: {bridge_data_path}")
    print(f"Tracks Directory: {tracks_dir}")
@@ -306,10 +321,6 @@ def train_model(
    # Loss function for action prediction
    action_criterion = nn.CrossEntropyLoss()
   
-   config = {
-       'learning_rate': 1e-4,
-   }
-  
    run_logs = {
    }
 
@@ -357,6 +368,17 @@ def train_model(
            epoch, val_trajectories, models, action_criterion, optimizer, device, track_memory_flag, training=False
        )
        
+       # Log average losses to W&B
+       wandb.log({
+           'epoch': epoch + 1,
+           'train_total_loss': train_total_loss,
+           'train_action_loss': train_action_loss,
+           'train_aux_loss': train_aux_loss,
+           'val_total_loss': val_total_loss,
+           'val_action_loss': val_action_loss,
+           'val_aux_loss': val_aux_loss
+       })
+       
        # Log average losses
        run_logs[f'epoch_{epoch + 1}'] = {
            'train_total_loss': train_total_loss,
@@ -380,6 +402,8 @@ def train_model(
            if patience_counter >= patience:
                print(f"Early stopping at epoch {epoch + 1}. No improvement for {patience} epochs.")
                break
+   # Finish W&B run
+   wandb.finish()
 
        # Optionally save a checkpoint at the end of every epoch
     #    save_checkpoint(epoch + 1, models, optimizer, config, run_logs, save_dir)
