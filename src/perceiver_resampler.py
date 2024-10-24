@@ -3,6 +3,8 @@ Taken from https://github.com/mlfoundations/open_flamingo/blob/main/open_flaming
 which itself is based on
 Based on: https://github.com/lucidrains/flamingo-pytorch
 """
+import os
+import json
 
 import torch
 from einops import rearrange, repeat
@@ -102,6 +104,11 @@ class GatedCrossAttentionBlock(nn.Module):
         x,
         context, # their media is our context
     ):
+
+        # Shape assertions
+        assert x.shape[-1] == context.shape[-1], "Input and context dimensions must match."
+        assert x.ndim == 3 and context.ndim == 3, "Expected 3D tensors for x and context."
+
         x = (
             self.attn(
                 x,
@@ -128,6 +135,12 @@ class PerceiverResampler(nn.Module):
         ff_mult=4,
     ):
         super().__init__()
+        self.dim = dim
+        self.depth = depth
+        self.dim_head = dim_head
+        self.heads = heads
+        self.num_latents = num_latents
+        self.ff_mult = ff_mult
         self.latents = nn.Parameter(torch.randn(num_latents, dim))
 
         self.layers = nn.ModuleList([])
@@ -153,8 +166,64 @@ class PerceiverResampler(nn.Module):
         """
         b, n, d = x.shape
         # blocks
-        latents = repeat(self.latents, "n d -> b n d", b=b)
+        latents = repeat(self.latents, "n d -> b n d", b=b).to(x.device)
         for cross_attn, ff in self.layers:
             latents = cross_attn(latents, x) + latents # because they are using perceiver attention here and we are using gated cross attention
             latents = ff(latents) + latents
         return self.norm(latents)
+    
+    def save(self, save_dir):
+        """
+        Save the model's state dictionary and hyperparameters separately as JSON.
+        """
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Save model state dict
+        model_path = os.path.join(save_dir, 'perceiver_model.pth')
+        torch.save(self.state_dict(), model_path)
+
+        # Save hyperparameters as JSON
+        hyperparameters = {
+            'dim': self.dim,
+            'depth': self.depth,
+            'dim_head': self.dim_head,
+            'heads': self.heads,
+            'num_latents': self.num_latents,
+            'ff_mult': self.ff_mult
+        }
+        hyperparameters_path = os.path.join(save_dir, 'hyperparameters.json')
+        with open(hyperparameters_path, 'w') as f:
+            json.dump(hyperparameters, f, indent=4)
+
+        print(f"Saved PerceiverResampler model to {model_path}")
+        print(f"Saved hyperparameters to {hyperparameters_path}")
+
+    @classmethod
+    def from_pretrained(cls, load_dir, device='cuda:0'):
+        """
+        Load the model's state dictionary and hyperparameters from JSON.
+        """
+        # Load hyperparameters from JSON
+        hyperparameters_path = os.path.join(load_dir, 'hyperparameters.json')
+        with open(hyperparameters_path, 'r') as f:
+            params = json.load(f)
+
+        # Create an instance of PerceiverResampler
+        model = cls(
+            dim=params['dim'],
+            depth=params['depth'],
+            dim_head=params['dim_head'],
+            heads=params['heads'],
+            num_latents=params['num_latents'],
+            ff_mult=params['ff_mult']
+        )
+
+        # Load model state dict
+        model_path = os.path.join(load_dir, 'perceiver_model.pth')
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.to(device)
+
+        print(f"Loaded PerceiverResampler model from {model_path}")
+        print(f"Loaded hyperparameters from {hyperparameters_path}")
+
+        return model
