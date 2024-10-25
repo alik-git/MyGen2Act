@@ -80,6 +80,17 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
     
     # Determine batch limit based on the current epoch
     max_batches = None
+    # if epoch_num   == 0:
+    #     max_batches = 10
+    # elif epoch_num == 1:
+    #     max_batches = 20
+    # elif epoch_num == 2:
+    #     max_batches = 30
+    # elif epoch_num == 3:
+    #     max_batches = 50
+    # elif epoch_num == 4:
+    #     max_batches = 100
+
     
     
     # Disable gradient calculation in validation
