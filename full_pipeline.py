@@ -35,7 +35,17 @@ from src.utils import compute_action_accuracies
 
 from src.utils import save_checkpoint, load_checkpoint
 
-def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device, track_memory_flag, training=True):
+
+def run_epoch(
+    epoch_num,
+    dataloader,
+    models,
+    action_criterion,
+    optimizer,
+    device,
+    track_memory_flag,
+    training=True,
+):
     """
     Run a single epoch for training or validation.
 
@@ -51,33 +61,32 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
     Returns:
         tuple: Average total loss, action loss, auxiliary loss.
     """
-    
+
     if training:
-        mode = 'Train'
+        mode = "Train"
         for model in models.values():
             model.train()
     else:
-        mode = 'Validation'
+        mode = "Validation"
         for model in models.values():
             model.eval()
-    
-    feature_extractor = models['feature_extractor']
-    gen_video_perceiver_resampler = models['gen_video_perceiver_resampler']
-    robot_video_perceiver_resampler = models['robot_video_perceiver_resampler']
-    gen_video_track_predictor = models['gen_video_track_predictor']
-    robot_video_track_predictor = models['robot_video_track_predictor']
-    action_predictor = models['action_predictor']
-    
+
+    feature_extractor = models["feature_extractor"]
+    gen_video_perceiver_resampler = models["gen_video_perceiver_resampler"]
+    robot_video_perceiver_resampler = models["robot_video_perceiver_resampler"]
+    gen_video_track_predictor = models["gen_video_track_predictor"]
+    robot_video_track_predictor = models["robot_video_track_predictor"]
+    action_predictor = models["action_predictor"]
+
     epoch_total_loss, epoch_action_loss, epoch_aux_loss = 0, 0, 0
-    
+
     epoch_batches_running_total = 0
-    
+
     correct_actions, total_actions = 0, 0  # For accuracy calculation
-    
+
     # Initialize accumulators for metrics at the start of the epoch
     epoch_total_acc_metrics = defaultdict(float)
 
-    
     # Determine batch limit based on the current epoch
     max_batches = None
     # if epoch_num   == 0:
@@ -91,20 +100,21 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
     # elif epoch_num == 4:
     #     max_batches = 100
 
-    
-    
     # Disable gradient calculation in validation
     context = torch.no_grad() if not training else torch.enable_grad()
 
-
-    
     # Progress bar with average loss
-    with tqdm(enumerate(dataloader), desc=f"Epoch {epoch_num + 1}", leave=True, unit=" batches") as pbar:
+    with tqdm(
+        enumerate(dataloader),
+        desc=f"Epoch {epoch_num + 1}",
+        leave=True,
+        unit=" batches",
+    ) as pbar:
         for batch_idx, batch in pbar:
-            
+
             if max_batches is not None and batch_idx >= max_batches:
                 print(f"Stopping early at batch {batch_idx} for epoch {epoch_num + 1}.")
-                break 
+                break
 
             # Get generated and robot videos
             generated_frames = batch['whole_episode_images'].numpy() # (batch_size, num_frames_gen, H, W, C)
@@ -203,8 +213,6 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
             # Accumulate metric values
             for key, value in acc_metrics.items():
                 epoch_total_acc_metrics[key] += value
-                    
-
 
             # --- Total Loss Computation ---
             # Without weights, after a few epochs:
@@ -225,298 +233,380 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
             epoch_total_loss += batch_total_loss.item()
             epoch_action_loss += batch_action_loss.item()
             epoch_aux_loss += batch_aux_loss.item()
-            epoch_batches_running_total += 1 # Increment batch count
-
+            epoch_batches_running_total += 1  # Increment batch count
 
             # Calculate running average loss
             batch_running_avg_loss = epoch_total_loss / epoch_batches_running_total
             batch_running_avg_action_loss = epoch_action_loss / epoch_batches_running_total
             batch_running_avg_aux_loss = epoch_aux_loss / epoch_batches_running_total
-            
+
             # Calculate running average of metrics
-            running_avg_acc_metrics = {f"{mode}_r_{key}": value / epoch_batches_running_total for key, value in epoch_total_acc_metrics.items()}
-            
+            running_avg_acc_metrics = {
+                f"{mode}_r_{key}": value / epoch_batches_running_total
+                for key, value in epoch_total_acc_metrics.items()
+            }
+
             # Log the running average metrics to W&B
             wandb.log(running_avg_acc_metrics)
 
-            
             # Calculate running accuracy
             running_accuracy = correct_actions / total_actions if total_actions > 0 else 0
 
 
             # Update TQDM progress bar
-            pbar.set_postfix({
-                f'{mode} Avg L': f'{batch_running_avg_loss:.3f}',
-                'Avg Act L': f'{batch_running_avg_action_loss:.3f}',
-                'Avg Aux L': f'{batch_running_avg_aux_loss:.3f}',
-                'Running Acc': f'{running_accuracy:.3f}'
-            })
-            
+            pbar.set_postfix(
+                {
+                    f"{mode} Avg L": f"{batch_running_avg_loss:.3f}",
+                    "Avg Act L": f"{batch_running_avg_action_loss:.3f}",
+                    "Avg Aux L": f"{batch_running_avg_aux_loss:.3f}",
+                    "Running Acc": f"{running_accuracy:.3f}",
+                }
+            )
+
             # also log the losses to wandb
-            wandb.log({
-                f'{mode}_batch_running_avg_loss': batch_running_avg_loss,
-                f'{mode}_batch_running_avg_action_loss': batch_running_avg_action_loss,
-                f'{mode}_batch_running_avg_aux_loss': batch_running_avg_aux_loss,
-                f'{mode}_running_accuracy': running_accuracy
-            })
-            k=1
-            
+            wandb.log(
+                {
+                    f"{mode}_batch_running_avg_loss": batch_running_avg_loss,
+                    f"{mode}_batch_running_avg_action_loss": batch_running_avg_action_loss,
+                    f"{mode}_batch_running_avg_aux_loss": batch_running_avg_aux_loss,
+                    f"{mode}_running_accuracy": running_accuracy,
+                }
+            )
+            k = 1
+
     epoch_total_batches = epoch_batches_running_total
     # Final average losses for the epoch
     avg_total_loss = epoch_total_loss / max(1, epoch_total_batches)
     avg_action_loss = epoch_action_loss / max(1, epoch_total_batches)
     avg_aux_loss = epoch_aux_loss / max(1, epoch_total_batches)
     avg_accuracy = correct_actions / total_actions if total_actions > 0 else 0
-    
-    final_avg_acc_metrics = {key: value / epoch_total_batches for key, value in epoch_total_acc_metrics.items()}
 
+    final_avg_acc_metrics = {
+        key: value / epoch_total_batches
+        for key, value in epoch_total_acc_metrics.items()
+    }
 
+    print(
+        f"{mode} - Avg Total Loss: {avg_total_loss:.4f}, Avg Action Loss: {avg_action_loss:.4f}, Accuracy: {avg_accuracy:.4f}"
+    )
 
-    print(f"{mode} - Avg Total Loss: {avg_total_loss:.4f}, Avg Action Loss: {avg_action_loss:.4f}, Accuracy: {avg_accuracy:.4f}")
-
-    return avg_total_loss, avg_action_loss, avg_aux_loss, avg_accuracy, final_avg_acc_metrics
-
+    return (
+        avg_total_loss,
+        avg_action_loss,
+        avg_aux_loss,
+        avg_accuracy,
+        final_avg_acc_metrics,
+    )
 
 
 def train_model(
-   bridge_data_path, tracks_dir, tapir_model_checkpoint_fp, save_dir, device='cuda:0', batch_size=1, epochs=1000, patience=10, track_memory_flag=False, checkpoint_path=None
+    bridge_data_path,
+    tracks_dir,
+    tapir_model_checkpoint_fp,
+    save_dir,
+    device="cuda:0",
+    batch_size=1,
+    epochs=1000,
+    patience=10,
+    track_memory_flag=False,
+    checkpoint_path=None,
 ):
-   """
-   Main function to build the dataset and  train models.
+    """
+    Main function to build the dataset and  train models.
 
 
-   Args:
-       bridge_data_path (str): Path to the bridge dataset directory.
-       tracks_dir (str): Path to the point tracks directory.
-       device (str): Device to use (e.g., cuda:0, cuda:1, or cpu).
-       batch_size (int): Batch size for processing trajectories.
-   """
-   # Initialize W&B
-   wandb.init(
-       project='Gen2Act-Training',
-       config={
-           'learning_rate': 1e-4,
-           'batch_size': batch_size,
-           'epochs': epochs,
-           'aux_loss_weight': 200.0,
-           'action_loss_weight': 0.33,
-       }
-   )
-   config = wandb.config  # use W&B config for flexibility
-   
-   print("==== Starting Video Processing Pipeline ====")
-   print(f"Bridge Data Path: {bridge_data_path}")
-   print(f"Tracks Directory: {tracks_dir}")
-   print(f"Device: {device}")
-   print(f"Batch Size: {batch_size}")
+    Args:
+        bridge_data_path (str): Path to the bridge dataset directory.
+        tracks_dir (str): Path to the point tracks directory.
+        device (str): Device to use (e.g., cuda:0, cuda:1, or cpu).
+        batch_size (int): Batch size for processing trajectories.
+    """
+    # Initialize W&B
+    wandb.init(
+        project="Gen2Act-Training",
+        config={
+            "learning_rate": 1e-4,
+            "batch_size": batch_size,
+            "epochs": epochs,
+            "aux_loss_weight": 200.0,
+            "action_loss_weight": 0.33,
+        },
+    )
+    config = wandb.config  # use W&B config for flexibility
 
+    print("==== Starting Video Processing Pipeline ====")
+    print(f"Bridge Data Path: {bridge_data_path}")
+    print(f"Tracks Directory: {tracks_dir}")
+    print(f"Device: {device}")
+    print(f"Batch Size: {batch_size}")
 
-   # Build the dataset
-   train_trajectories, val_trajectories = build_dataset(
-       bridge_data_path=bridge_data_path,
-       tracks_dir=tracks_dir,
-       tapir_model_checkpoint_fp=tapir_model_checkpoint_fp,
-       trajectory_length=8,
-       next_actions_length=4,
-       train_split='train',
-       val_split='val',
-       batch_size=batch_size
-   )
+    # Build the dataset
+    train_trajectories, val_trajectories = build_dataset(
+        bridge_data_path=bridge_data_path,
+        tracks_dir=tracks_dir,
+        tapir_model_checkpoint_fp=tapir_model_checkpoint_fp,
+        trajectory_length=8,
+        next_actions_length=4,
+        train_split="train",
+        val_split="val",
+        batch_size=batch_size,
+    )
 
-   # Initialize models with memory profiling
-   track_memory("Before initializing models", device, track_flag=track_memory_flag)
+    # Initialize models with memory profiling
+    track_memory("Before initializing models", device, track_flag=track_memory_flag)
 
+    # Feature Extractor
+    feature_extractor = VideoFeatureExtractor(device=device)
 
-   # Feature Extractor
-   feature_extractor = VideoFeatureExtractor(device=device)
-  
-   # Freeze ViT parameters to prevent updates during training
-   for param in feature_extractor.parameters():
-       param.requires_grad = False
+    # Freeze ViT parameters to prevent updates during training
+    for param in feature_extractor.parameters():
+        param.requires_grad = False
 
+    # Perceiver Resampler
+    gen_video_perceiver_resampler = PerceiverResampler(
+        dim=768, num_latents=64, depth=2, heads=8, dim_head=64, ff_mult=4
+    ).to(device)
 
-   # Perceiver Resampler
-   gen_video_perceiver_resampler = PerceiverResampler(
-       dim=768, num_latents=64, depth=2, heads=8, dim_head=64, ff_mult=4
-   ).to(device)
-  
-   robot_video_perceiver_resampler = PerceiverResampler(
-       dim=768, num_latents=64, depth=2, heads=8, dim_head=64, ff_mult=4
-   ).to(device)
+    robot_video_perceiver_resampler = PerceiverResampler(
+        dim=768, num_latents=64, depth=2, heads=8, dim_head=64, ff_mult=4
+    ).to(device)
 
+    # Track Prediction Transformer for generated video
+    gen_video_track_predictor = TrackPredictionTransformer(
+        point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=16
+    ).to(device)
 
-   # Track Prediction Transformer for generated video
-   gen_video_track_predictor = TrackPredictionTransformer(
-       point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=16
-   ).to(device)
+    # Track Prediction Transformer for robot video
+    robot_video_track_predictor = TrackPredictionTransformer(
+        point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=8
+    ).to(device)
 
+    # Action Prediction Transformer
+    action_predictor = ActionPredictionTransformer(
+        hidden_dim=768,
+        num_encoder_layers=6,
+        num_decoder_layers=6,
+        num_heads=8,
+        action_dim=7,  # As per your action dimensions
+        num_future_actions=4,  # Predict next 4 actions
+        num_bins=256,
+        dropout=0.1,
+    ).to(device)
+    track_memory("After initializing models", device, track_flag=track_memory_flag)
 
-   # Track Prediction Transformer for robot video
-   robot_video_track_predictor = TrackPredictionTransformer(
-       point_dim=2, hidden_dim=768, num_layers=6, num_heads=8, num_frames=8
-   ).to(device)
+    models = {
+        "feature_extractor": feature_extractor,
+        "gen_video_perceiver_resampler": gen_video_perceiver_resampler,
+        "robot_video_perceiver_resampler": robot_video_perceiver_resampler,
+        "gen_video_track_predictor": gen_video_track_predictor,
+        "robot_video_track_predictor": robot_video_track_predictor,
+        "action_predictor": action_predictor,
+    }
 
+    # Loss function for action prediction
+    action_criterion = nn.CrossEntropyLoss()
 
-   # Action Prediction Transformer
-   action_predictor = ActionPredictionTransformer(
-       hidden_dim=768,
-       num_encoder_layers=6,
-       num_decoder_layers=6,
-       num_heads=8,
-       action_dim=7,  # As per your action dimensions
-       num_future_actions=4,  # Predict next 4 actions
-       num_bins=256,
-       dropout=0.1
-   ).to(device)
-   track_memory("After initializing models", device, track_flag=track_memory_flag)
-  
-   models = {
-       'feature_extractor': feature_extractor,
-       'gen_video_perceiver_resampler': gen_video_perceiver_resampler,
-       'robot_video_perceiver_resampler': robot_video_perceiver_resampler,
-       'gen_video_track_predictor': gen_video_track_predictor,
-       'robot_video_track_predictor': robot_video_track_predictor,
-       'action_predictor': action_predictor
-   }
+    run_logs = {}
 
+    # Optimizer
+    optimizer = torch.optim.Adam(
+        list(gen_video_perceiver_resampler.parameters())
+        + list(robot_video_perceiver_resampler.parameters())
+        + list(gen_video_track_predictor.parameters())
+        + list(robot_video_track_predictor.parameters())
+        + list(action_predictor.parameters()),
+        lr=config["learning_rate"],
+    )
 
+    #    checkpoint_path = "/home/kasm-user/MyGen2Act/saved_checkpoints/epoch_5"
 
+    # Load from checkpoint if provided
+    if checkpoint_path:
+        print(f"Loading checkpoint from {checkpoint_path}...")
+        config, run_logs = load_checkpoint(checkpoint_path, device, models, optimizer)
 
-   # Loss function for action prediction
-   action_criterion = nn.CrossEntropyLoss()
-  
-   run_logs = {
-   }
+        # print(f"Checkpoint loaded. Starting with best loss: {best_avg_loss:.4f}")
 
+    # Initialize best_loss
+    best_avg_loss = float("inf")  # Initialize best_loss at the start
 
-   # Optimizer
-   optimizer = torch.optim.Adam(
-       list(gen_video_perceiver_resampler.parameters()) +
-       list(robot_video_perceiver_resampler.parameters()) +
-       list(gen_video_track_predictor.parameters()) +
-       list(robot_video_track_predictor.parameters()) +
-       list(action_predictor.parameters()),
-       lr=config['learning_rate']
-   )
-  
-#    checkpoint_path = "/home/kasm-user/MyGen2Act/saved_checkpoints/epoch_5"
-  
-   # Load from checkpoint if provided
-   if checkpoint_path:
-       print(f"Loading checkpoint from {checkpoint_path}...")
-       config, run_logs = load_checkpoint(checkpoint_path, device, models, optimizer)
+    # Initialize best_loss for early stopping
+    best_val_loss = float("inf")
+    patience_counter = 0
 
+    for epoch in range(epochs):
+        print(f"\nEpoch {epoch + 1}/{epochs}")
 
-       # print(f"Checkpoint loaded. Starting with best loss: {best_avg_loss:.4f}")
+        # Training phase
+        (
+            train_total_loss,
+            train_action_loss,
+            train_aux_loss,
+            train_acc,
+            train_acc_metrics,
+        ) = run_epoch(
+            epoch,
+            train_trajectories,
+            models,
+            action_criterion,
+            optimizer,
+            device,
+            track_memory_flag,
+            training=True,
+        )
 
+        # Validation phase
+        (
+            val_total_loss,
+            val_action_loss,
+            val_aux_loss,
+            val_acc,
+            val_acc_metrics,
+        ) = run_epoch(
+            epoch,
+            val_trajectories,
+            models,
+            action_criterion,
+            optimizer,
+            device,
+            track_memory_flag,
+            training=False,
+        )
 
-  
-   # Initialize best_loss
-   best_avg_loss = float('inf')  # Initialize best_loss at the start
-   
-   # Initialize best_loss for early stopping
-   best_val_loss = float('inf')
-   patience_counter = 0
-  
-   for epoch in range(epochs):
-       print(f"\nEpoch {epoch + 1}/{epochs}")
-       
-       
-       # Training phase
-       train_total_loss, train_action_loss, train_aux_loss, train_acc, train_acc_metrics = run_epoch(
-           epoch, train_trajectories, models, action_criterion, optimizer, device, track_memory_flag, training=True
-       )
-       
-       # Validation phase
-       val_total_loss, val_action_loss, val_aux_loss, val_acc, val_acc_metrics = run_epoch(
-           epoch, val_trajectories, models, action_criterion, optimizer, device, track_memory_flag, training=False
-       )
-       
-       # Log average losses to W&B
-       wandb.log({
-           'epoch': epoch + 1,
-           'train_total_loss': train_total_loss,
-           'train_action_loss': train_action_loss,
-           'train_aux_loss': train_aux_loss,
-           'train_accuracy': train_acc,
-           'val_total_loss': val_total_loss,
-           'val_action_loss': val_action_loss,
-           'val_aux_loss': val_aux_loss,
-           'val_accuracy': val_acc
-       })
-       
-       # Log the final average metrics
-       wandb.log({f'train_epoch_avg_{key}': avg_value for key, avg_value in train_acc_metrics.items()})
-       wandb.log({f'val_epoch_avg_{key}': avg_value for key, avg_value in val_acc_metrics.items()})
-       
-       # Log average losses
-       run_logs[f'epoch_{epoch + 1}'] = {
-           'train_total_loss': train_total_loss,
-           'train_action_loss': train_action_loss,
-           'train_aux_loss': train_aux_loss,
-           'train_accuracy': train_acc,
-           'val_total_loss': val_total_loss,
-           'val_action_loss': val_action_loss,
-           'val_aux_loss': val_aux_loss,
-           'val_accuracy': val_acc,
-       }
-       
-       print(f"Epoch {epoch + 1} - Train Loss: {train_total_loss:.4f}, Val Loss: {val_total_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
-       
-       # Early stopping
-       if val_total_loss < best_val_loss:
-           best_val_loss = val_total_loss
-           patience_counter = 0
-           print(f"New best model at epoch {epoch + 1} with validation loss {best_val_loss:.4f}.")
-           save_checkpoint(epoch + 1, models, optimizer, config, run_logs, save_dir)
-       else:
-           patience_counter += 1
-           if patience_counter >= patience:
-               print(f"Early stopping at epoch {epoch + 1}. No improvement for {patience} epochs.")
-               break
-   # Finish W&B run
-   wandb.finish()
+        # Log average losses to W&B
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "train_total_loss": train_total_loss,
+                "train_action_loss": train_action_loss,
+                "train_aux_loss": train_aux_loss,
+                "train_accuracy": train_acc,
+                "val_total_loss": val_total_loss,
+                "val_action_loss": val_action_loss,
+                "val_aux_loss": val_aux_loss,
+                "val_accuracy": val_acc,
+            }
+        )
 
-       # Optionally save a checkpoint at the end of every epoch
+        # Log the final average metrics
+        wandb.log(
+            {
+                f"train_epoch_avg_{key}": avg_value
+                for key, avg_value in train_acc_metrics.items()
+            }
+        )
+        wandb.log(
+            {
+                f"val_epoch_avg_{key}": avg_value
+                for key, avg_value in val_acc_metrics.items()
+            }
+        )
+
+        # Log average losses
+        run_logs[f"epoch_{epoch + 1}"] = {
+            "train_total_loss": train_total_loss,
+            "train_action_loss": train_action_loss,
+            "train_aux_loss": train_aux_loss,
+            "train_accuracy": train_acc,
+            "val_total_loss": val_total_loss,
+            "val_action_loss": val_action_loss,
+            "val_aux_loss": val_aux_loss,
+            "val_accuracy": val_acc,
+        }
+
+        print(
+            f"Epoch {epoch + 1} - Train Loss: {train_total_loss:.4f}, Val Loss: {val_total_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}"
+        )
+
+        # Early stopping
+        if val_total_loss < best_val_loss:
+            best_val_loss = val_total_loss
+            patience_counter = 0
+            print(
+                f"New best model at epoch {epoch + 1} with validation loss {best_val_loss:.4f}."
+            )
+            save_checkpoint(epoch + 1, models, optimizer, config, run_logs, save_dir)
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(
+                    f"Early stopping at epoch {epoch + 1}. No improvement for {patience} epochs."
+                )
+                break
+    # Finish W&B run
+    wandb.finish()
+
+    # Optionally save a checkpoint at the end of every epoch
     #    save_checkpoint(epoch + 1, models, optimizer, config, run_logs, save_dir)
 
 
 if __name__ == "__main__":
-   # Parse command-line arguments
-   parser = argparse.ArgumentParser(description='Run video processing with specified GPU and batch size.')
-   parser.add_argument('--bridge_data_path', type=str, default="/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/",
-                       help='Path to the bridge dataset directory.')
-   parser.add_argument('--tracks_dir', type=str, default="/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/",
-                       help='Path to the point tracks directory.')
-   parser.add_argument('--tapir_model_checkpoint_fp', type=str, default="/home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt",
-                       help='Path to the TAPIR model checkpoint file.')
-   # add sav_dir arg for where to save trained models
-   parser.add_argument('--save_dir', type=str, default='/home/kasm-user/MyGen2Act/saved_checkpoints', help='path to save trained model checkpoints')
-   parser.add_argument('--device', type=str, default='cuda:0',
-                       help='Device to use, e.g., cuda:0, cuda:1, or cpu (default: cuda:0)')
-   parser.add_argument('--batch_size', type=int, default=1,
-                       help='Batch size for processing trajectories (default: 1)')
-   parser.add_argument('--epochs', type=int, default=1000)
-   parser.add_argument('--patience', type=int, default=100)
-   parser.add_argument('--track_memory_flag', type=bool, default=False,
-                       help='Track memory usage (default: False)')
-   parser.add_argument('--checkpoint_path', type=str, default=None,
-   help='Path to a saved checkpoint to load from (if any).')
-   args = parser.parse_args()
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description="Run video processing with specified GPU and batch size."
+    )
+    parser.add_argument(
+        "--bridge_data_path",
+        type=str,
+        default="/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/",
+        help="Path to the bridge dataset directory.",
+    )
+    parser.add_argument(
+        "--tracks_dir",
+        type=str,
+        default="/home/kasm-user/alik_local_data/bridge_dataset/1.0.0/",
+        help="Path to the point tracks directory.",
+    )
+    parser.add_argument(
+        "--tapir_model_checkpoint_fp",
+        type=str,
+        default="/home/kasm-user/tapnet/checkpoints/bootstapir_checkpoint_v2.pt",
+        help="Path to the TAPIR model checkpoint file.",
+    )
+    # add sav_dir arg for where to save trained models
+    parser.add_argument(
+        "--save_dir",
+        type=str,
+        default="/home/kasm-user/MyGen2Act/saved_checkpoints",
+        help="path to save trained model checkpoints",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda:0",
+        help="Device to use, e.g., cuda:0, cuda:1, or cpu (default: cuda:0)",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Batch size for processing trajectories (default: 1)",
+    )
+    parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--patience", type=int, default=100)
+    parser.add_argument(
+        "--track_memory_flag",
+        type=bool,
+        default=False,
+        help="Track memory usage (default: False)",
+    )
+    parser.add_argument(
+        "--checkpoint_path",
+        type=str,
+        default=None,
+        help="Path to a saved checkpoint to load from (if any).",
+    )
+    args = parser.parse_args()
 
-
-   train_model(
-       bridge_data_path=args.bridge_data_path,
-       tracks_dir=args.tracks_dir,
-       tapir_model_checkpoint_fp=args.tapir_model_checkpoint_fp,
-       save_dir=args.save_dir,
-       device=args.device,
-       batch_size=args.batch_size,
-       epochs=args.epochs,
-       patience=args.patience,
-       track_memory_flag=args.track_memory_flag,
-       checkpoint_path=args.checkpoint_path
-   )
-
-
-
+    train_model(
+        bridge_data_path=args.bridge_data_path,
+        tracks_dir=args.tracks_dir,
+        tapir_model_checkpoint_fp=args.tapir_model_checkpoint_fp,
+        save_dir=args.save_dir,
+        device=args.device,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        patience=args.patience,
+        track_memory_flag=args.track_memory_flag,
+        checkpoint_path=args.checkpoint_path,
+    )
