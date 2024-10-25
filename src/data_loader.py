@@ -55,6 +55,9 @@ def get_sample_indices(num_steps, num_samples=16):
     else:
         # If fewer frames than 'num_samples', use all available frames
         episode_sampled_indices = list(range(num_steps))
+        
+    # assert that there are at least num_samples frames
+    assert len(episode_sampled_indices) >= num_samples, f"Number of sampled indices is less than {num_samples}"
 
     return episode_sampled_indices
 
@@ -78,6 +81,10 @@ def process_episode(episode, trajectory_length, next_actions_length, tracks_dir,
     trajectories = []
     steps = list(episode['steps'].as_numpy_iterator())
     num_steps = len(steps)
+    
+    # Skip episodes with fewer than 16 frames
+    if num_steps < 16:
+        return trajectories, tapir_model
 
     # Sample frames for the entire episode
     episode_sampled_indices = get_sample_indices(num_steps, num_samples=16)
@@ -174,9 +181,79 @@ def process_episode(episode, trajectory_length, next_actions_length, tracks_dir,
     return trajectories, tapir_model
 
 
-def build_dataset(bridge_data_path, tracks_dir, tapir_model_checkpoint_fp, trajectory_length=8, next_actions_length=4, train_split='train', val_split='val', batch_size=1):
+
+# Helper function to determine output types and shapes from a sample trajectory
+def get_output_types_shapes(sample_trajectory):
     """
-    Builds a tf.data.Dataset with both training and validation splits.
+    Determines the output types and shapes from a sample trajectory.
+
+    Args:
+        sample_trajectory (dict): A sample trajectory from the dataset.
+
+    Returns:
+        output_types (dict): Dictionary of output types.
+        output_shapes (dict): Dictionary of output shapes.
+    """
+    output_types = {}
+    output_shapes = {}
+
+    for key, value in sample_trajectory.items():
+        if isinstance(value, bytes):  # Handle string separately
+            output_types[key] = tf.string
+            output_shapes[key] = tf.TensorShape([])  # Scalar shape for strings
+        else:
+            output_types[key] = tf.as_dtype(value.dtype)
+            output_shapes[key] = tf.TensorShape(value.shape)
+
+    return output_types, output_shapes
+
+# Helper function to update running average
+def update_running_average(current_avg, new_value, count):
+    """
+    Update the running average with a new value.
+
+    Args:
+        current_avg (float): The current average.
+        new_value (int): The new value to include.
+        count (int): The current count of values.
+
+    Returns:
+        new_avg (float): The updated average.
+    """
+    return (current_avg * (count - 1) + new_value) / count
+
+
+# Generator to yield trajectories one-by-one as they are processed
+def lazy_loader_gen(episodes, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp):
+    """
+    Generator to yield trajectories one-by-one as they are processed.
+    """
+    tapir_model = None  # Initialize the TAPIR model only if needed
+    total_trajectories = 0
+    episode_count = 0
+    running_avg_trajectories = 0
+
+    for episode in episodes:
+        curr_trajectories, tapir_model = process_episode(
+            episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
+        )
+        episode_trajectories = len(curr_trajectories)
+        total_trajectories += episode_trajectories
+        episode_count += 1
+
+        # Update the running average
+        running_avg_trajectories = update_running_average(running_avg_trajectories, episode_trajectories, episode_count)
+
+        # Log the running average for debugging (optional)
+        print(f"\nEpisode {episode_count}: {episode_trajectories} trajectories, Running Avg: {running_avg_trajectories:.2f}\n")
+
+        for traj in curr_trajectories:
+            yield traj  # Yield each trajectory as it's processed
+
+
+def build_dataset(bridge_data_path, tracks_dir, tapir_model_checkpoint_fp, trajectory_length=8, next_actions_length=4, train_split='train', val_split='val', batch_size=1, lazy_loading=True, shuffle=True, shuffle_buffer_size=10000):
+    """
+    Builds a tf.data.Dataset with both training and validation splits, with lazy loading option.
 
     Args:
         bridge_data_path (str): Path to the bridge dataset directory.
@@ -186,6 +263,7 @@ def build_dataset(bridge_data_path, tracks_dir, tapir_model_checkpoint_fp, traje
         train_split (str): Split for training data.
         val_split (str): Split for validation data.
         batch_size (int): Batch size for the dataset.
+        lazy_loading (bool): Whether to use lazy loading (default: True).
 
     Returns:
         Tuple: (tf.data.Dataset for training, tf.data.Dataset for validation)
@@ -254,74 +332,83 @@ def build_dataset(bridge_data_path, tracks_dir, tapir_model_checkpoint_fp, traje
     # Load train and validation splits
     train_dataset = dataset_builder.as_dataset(split=train_split)
     val_dataset = dataset_builder.as_dataset(split=val_split)
-    
+
     num_train_dataset_episodes = count_episodes(train_dataset)
     num_val_dataset_episodes = count_episodes(val_dataset)
-    
+
     print(f"Number of episodes in the training dataset: {num_train_dataset_episodes}")
     print(f"Number of episodes in the validation dataset: {num_val_dataset_episodes}")
+    
+    # Shuffle before batching if needed
+    if shuffle:
+        print("Shuffling the dataset!!")
+        train_dataset = train_dataset.shuffle(buffer_size=shuffle_buffer_size)
+        val_dataset = val_dataset.shuffle(buffer_size=shuffle_buffer_size)
+        
+    # Initialize counters for running average computation
+    total_trajectories = 0
+    total_episodes = 0
+    
+    
+    # Get a sample trajectory from the generator to determine output types and shapes
+    sample_episode = next(iter(train_dataset))
+    sample_trajectories, _ = process_episode(
+        sample_episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, None
+    )
+    output_types, output_shapes = get_output_types_shapes(sample_trajectories[0])
 
-    train_trajectories = []
-    with tqdm.tqdm(total=num_train_dataset_episodes, desc="Processing Training Episodes") as pbar:
-        for train_episode in train_dataset:
-            curr_train_trajectories, tapir_model = process_episode(
-                train_episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
-            )
-            train_trajectories.extend(curr_train_trajectories)
-            pbar.update(1)
+    if lazy_loading:
+        print("Using lazy loading for the dataset.")
+        train_tf_dataset = tf.data.Dataset.from_generator(
+            lambda: lazy_loader_gen(train_dataset, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp),
+            output_types=output_types,
+            output_shapes=output_shapes
+        ).batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
-    val_trajectories = []
-    with tqdm.tqdm(total=num_val_dataset_episodes, desc="Processing Validation Episodes") as pbar:
-        for val_episode in val_dataset:
-            curr_val_trajectories, tapir_model = process_episode(
-                val_episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
-            )
-            val_trajectories.extend(curr_val_trajectories)
-            pbar.update(1)
-
-    # Create a tf.data.Dataset from trajectories
-    def gen(data):
-        for traj in data:
-            yield traj
-
-    # Define the output types and shapes based on the first trajectory
-    sample_trajectory = train_trajectories[0]
-    output_types = {
-        'trajectory_images': tf.uint8,
-        'trajectory_actions': tf.float32,
-        'next_actions': tf.float32,
-        'trajectory_discount': tf.float32,
-        'trajectory_is_first': tf.bool,
-        'trajectory_is_last': tf.bool,
-        'trajectory_is_terminal': tf.bool,
-        'language_instruction': tf.string,
-        'trajectory_reward': tf.float32,
-        'whole_episode_images': tf.uint8,
-        'trajectory_tracks': tf.float64,
-        'trajectory_visibles': tf.bool,
-        'whole_episode_tracks': tf.float64,
-        'whole_episode_visibles': tf.bool
-    }
-    output_shapes = {}
-    for key, value in sample_trajectory.items():
-        if isinstance(value, bytes):  # Handle string separately
-            output_shapes[key] = tf.TensorShape([])  # Scalar shape for strings
-        else:
-            output_shapes[key] = tf.TensorShape(value.shape)  # Regular shape for tensors/arrays
+        val_tf_dataset = tf.data.Dataset.from_generator(
+            lambda: lazy_loader_gen(val_dataset, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp),
+            output_types=output_types,
+            output_shapes=output_shapes
+        ).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+        print("Built lazy loading datasets successfully.")
 
 
-    # Create tf.data.Dataset for training and validation
-    train_tf_dataset = tf.data.Dataset.from_generator(
-        lambda: gen(train_trajectories),
-        output_types=output_types,
-        output_shapes=output_shapes
-    ).batch(batch_size)
+    else: # Load the full dataset into memory
+        print("Loading the full dataset into memory.")
+        train_trajectories = []
+        with tqdm.tqdm(total=num_train_dataset_episodes, desc="Processing Training Episodes") as pbar:
+            for train_episode in train_dataset:
+                curr_train_trajectories, tapir_model = process_episode(
+                    train_episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
+                )
+                train_trajectories.extend(curr_train_trajectories)
+                pbar.update(1)
 
-    val_tf_dataset = tf.data.Dataset.from_generator(
-        lambda: gen(val_trajectories),
-        output_types=output_types,
-        output_shapes=output_shapes
-    ).batch(batch_size)
+        val_trajectories = []
+        with tqdm.tqdm(total=num_val_dataset_episodes, desc="Processing Validation Episodes") as pbar:
+            for val_episode in val_dataset:
+                curr_val_trajectories, tapir_model = process_episode(
+                    val_episode, trajectory_length, next_actions_length, tracks_dir, tapir_model_checkpoint_fp, tapir_model
+                )
+                val_trajectories.extend(curr_val_trajectories)
+                pbar.update(1)
+
+        # Create a tf.data.Dataset from trajectories
+        def unlazy_gen(data):
+            for traj in data:
+                yield traj
+        train_tf_dataset = tf.data.Dataset.from_generator(
+            lambda: unlazy_gen(train_trajectories),
+            output_types=output_types,
+            output_shapes=output_shapes
+        ).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+        val_tf_dataset = tf.data.Dataset.from_generator(
+            lambda: unlazy_gen(val_trajectories),
+            output_types=output_types,
+            output_shapes=output_shapes
+        ).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+        print("Loaded the full dataset into memory.")
 
     print("Training and validation datasets built successfully.")
     return train_tf_dataset, val_tf_dataset
@@ -339,11 +426,15 @@ if __name__ == '__main__':
     parser.add_argument('--bridge_data_path', type=str, required=True, help='Path to the bridge dataset directory.')
     parser.add_argument('--tracks_dir', type=str, required=True, help='Path to the directory containing point tracks.')
     parser.add_argument('--tapir_model_checkpoint_fp', type=str, required=True, help='Path to the TAPIR model checkpoint.')
+    parser.add_argument('--lazy_loading', type=bool, default=True, 
+                        help='Whether to use lazy loading for the dataset (default: True)')
 
     args = parser.parse_args()
 
-    # Build the dataset
-    train_dataset, val_dataset = build_dataset(args.bridge_data_path, args.tracks_dir, args.tapir_model_checkpoint_fp)
+    # Build the dataset with the lazy_loading argument
+    train_dataset, val_dataset = build_dataset(
+        args.bridge_data_path, args.tracks_dir, args.tapir_model_checkpoint_fp, lazy_loading=args.lazy_loading
+    )
 
     # Iterate through the dataset and process each sample
     for train_sample in train_dataset.take(5):  # Limit to 5 samples for demonstration

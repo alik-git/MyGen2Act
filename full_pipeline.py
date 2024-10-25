@@ -3,6 +3,7 @@ python full_pipeline.py --bridge_data_path /nfs/scratch/pawel/octo/octo/bridge_d
 """
 
 
+from collections import defaultdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -28,6 +29,8 @@ from src.track_pred_transformer import TrackPredictionTransformer
 
 
 from src.utils import track_memory
+
+from src.utils import compute_action_accuracies
 
 
 from src.utils import save_checkpoint, load_checkpoint
@@ -66,24 +69,31 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
     action_predictor = models['action_predictor']
     
     epoch_total_loss, epoch_action_loss, epoch_aux_loss = 0, 0, 0
+    
+    epoch_batches_running_total = 0
+    
+    correct_actions, total_actions = 0, 0  # For accuracy calculation
+    
+    # Initialize accumulators for metrics at the start of the epoch
+    epoch_total_acc_metrics = defaultdict(float)
 
-    # Get total number of batches
-    print("counting batches")
-    epoch_total_batches = sum(1 for _ in dataloader)
-    print("number of batches: ", epoch_total_batches)
-    print("done counting batches")
+    
+    # Determine batch limit based on the current epoch
+    max_batches = None
     
     
     # Disable gradient calculation in validation
     context = torch.no_grad() if not training else torch.enable_grad()
 
 
-    # Progress bar with avg loss
-    with tqdm(enumerate(dataloader), total=epoch_total_batches, desc=f"Epoch {epoch_num + 1}", leave=True) as pbar:
+    
+    # Progress bar with average loss
+    with tqdm(enumerate(dataloader), desc=f"Epoch {epoch_num + 1}", leave=True, unit=" batches") as pbar:
         for batch_idx, batch in pbar:
-
-
-
+            
+            if max_batches is not None and batch_idx >= max_batches:
+                print(f"Stopping early at batch {batch_idx} for epoch {epoch_num + 1}.")
+                break 
 
             # Get generated and robot videos
             generated_frames = batch['whole_episode_images'].numpy() # (batch_size, num_frames_gen, H, W, C)
@@ -162,11 +172,27 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
             gt_actions_normalized = torch.clamp(gt_actions_normalized, 0.0, 1.0)
             gt_actions_discrete = (gt_actions_normalized * (action_predictor.num_bins - 1)).long() # 256 bins
 
+            # Get predicted discrete actions
+            pred_actions_discrete = torch.argmax(action_logits, dim=-1)  # Shape: (batch_size, num_future_actions, action_dim)
+
+
 
             # Compute action prediction loss
             action_logits_flat = action_logits.view(-1, action_predictor.num_bins)  # Shape: (batch_size * num_future_actions * action_dim, num_bins)
             gt_actions_flat = gt_actions_discrete.view(-1)  # Shape: (batch_size * num_future_actions * action_dim)
             batch_action_loss = action_criterion(action_logits_flat, gt_actions_flat)  # Scalar, action prediction loss
+            
+            # Compute accuracy for action prediction
+            pred_actions_flat = pred_actions_discrete.view(-1)  # Flatten predicted actions
+            correct_actions += (pred_actions_flat == gt_actions_flat).sum().item()
+            total_actions += gt_actions_flat.numel()
+            
+            acc_metrics = compute_action_accuracies(pred_actions_discrete, gt_actions_discrete)
+            
+            # Accumulate metric values
+            for key, value in acc_metrics.items():
+                epoch_total_acc_metrics[key] += value
+                    
 
 
             # --- Total Loss Computation ---
@@ -179,39 +205,65 @@ def run_epoch(epoch_num, dataloader, models, action_criterion, optimizer, device
             batch_total_loss = (aux_loss_weight * batch_aux_loss) \
                 + (action_loss_weight * batch_action_loss)
 
-
-            # Backpropagation and optimization
-            optimizer.zero_grad()
-            batch_total_loss.backward()
-            optimizer.step()
+            if training:
+                optimizer.zero_grad()
+                batch_total_loss.backward()
+                optimizer.step()
 
             # Accumulate losses for tracking
             epoch_total_loss += batch_total_loss.item()
             epoch_action_loss += batch_action_loss.item()
             epoch_aux_loss += batch_aux_loss.item()
+            epoch_batches_running_total += 1 # Increment batch count
 
 
             # Calculate running average loss
-            batch_running_avg_loss = epoch_total_loss / (batch_idx + 1)
-            batch_running_avg_action_loss = epoch_action_loss / (batch_idx + 1)
-            batch_running_avg_aux_loss = epoch_aux_loss / (batch_idx + 1)
+            batch_running_avg_loss = epoch_total_loss / epoch_batches_running_total
+            batch_running_avg_action_loss = epoch_action_loss / epoch_batches_running_total
+            batch_running_avg_aux_loss = epoch_aux_loss / epoch_batches_running_total
+            
+            # Calculate running average of metrics
+            running_avg_acc_metrics = {f"{mode}_r_{key}": value / epoch_batches_running_total for key, value in epoch_total_acc_metrics.items()}
+            
+            # Log the running average metrics to W&B
+            wandb.log(running_avg_acc_metrics)
+
+            
+            # Calculate running accuracy
+            running_accuracy = correct_actions / total_actions if total_actions > 0 else 0
 
 
             # Update TQDM progress bar
             pbar.set_postfix({
-                'Avg Loss': f'{batch_running_avg_loss:.4f}',
-                'Avg Action Loss': f'{batch_running_avg_action_loss:.4f}',
-                'Avg Aux Loss': f'{batch_running_avg_aux_loss:.4f}'
+                f'{mode} Avg L': f'{batch_running_avg_loss:.3f}',
+                'Avg Act L': f'{batch_running_avg_action_loss:.3f}',
+                'Avg Aux L': f'{batch_running_avg_aux_loss:.3f}',
+                'Running Acc': f'{running_accuracy:.3f}'
+            })
+            
+            # also log the losses to wandb
+            wandb.log({
+                f'{mode}_batch_running_avg_loss': batch_running_avg_loss,
+                f'{mode}_batch_running_avg_action_loss': batch_running_avg_action_loss,
+                f'{mode}_batch_running_avg_aux_loss': batch_running_avg_aux_loss,
+                f'{mode}_running_accuracy': running_accuracy
             })
             k=1
-
+            
+    epoch_total_batches = epoch_batches_running_total
     # Final average losses for the epoch
     avg_total_loss = epoch_total_loss / max(1, epoch_total_batches)
     avg_action_loss = epoch_action_loss / max(1, epoch_total_batches)
     avg_aux_loss = epoch_aux_loss / max(1, epoch_total_batches)
+    avg_accuracy = correct_actions / total_actions if total_actions > 0 else 0
+    
+    final_avg_acc_metrics = {key: value / epoch_total_batches for key, value in epoch_total_acc_metrics.items()}
 
-    print(f"{mode} - Avg Total Loss: {avg_total_loss:.4f}, Avg Action Loss: {avg_action_loss:.4f}, Avg Aux Loss: {avg_aux_loss:.4f}")
-    return avg_total_loss, avg_action_loss, avg_aux_loss
+
+
+    print(f"{mode} - Avg Total Loss: {avg_total_loss:.4f}, Avg Action Loss: {avg_action_loss:.4f}, Accuracy: {avg_accuracy:.4f}")
+
+    return avg_total_loss, avg_action_loss, avg_aux_loss, avg_accuracy, final_avg_acc_metrics
 
 
 
@@ -360,12 +412,12 @@ def train_model(
        
        
        # Training phase
-       train_total_loss, train_action_loss, train_aux_loss = run_epoch(
+       train_total_loss, train_action_loss, train_aux_loss, train_acc, train_acc_metrics = run_epoch(
            epoch, train_trajectories, models, action_criterion, optimizer, device, track_memory_flag, training=True
        )
        
        # Validation phase
-       val_total_loss, val_action_loss, val_aux_loss = run_epoch(
+       val_total_loss, val_action_loss, val_aux_loss, val_acc, val_acc_metrics = run_epoch(
            epoch, val_trajectories, models, action_criterion, optimizer, device, track_memory_flag, training=False
        )
        
@@ -375,22 +427,30 @@ def train_model(
            'train_total_loss': train_total_loss,
            'train_action_loss': train_action_loss,
            'train_aux_loss': train_aux_loss,
+           'train_accuracy': train_acc,
            'val_total_loss': val_total_loss,
            'val_action_loss': val_action_loss,
-           'val_aux_loss': val_aux_loss
+           'val_aux_loss': val_aux_loss,
+           'val_accuracy': val_acc
        })
+       
+       # Log the final average metrics
+       wandb.log({f'train_epoch_avg_{key}': avg_value for key, avg_value in train_acc_metrics.items()})
+       wandb.log({f'val_epoch_avg_{key}': avg_value for key, avg_value in val_acc_metrics.items()})
        
        # Log average losses
        run_logs[f'epoch_{epoch + 1}'] = {
            'train_total_loss': train_total_loss,
            'train_action_loss': train_action_loss,
            'train_aux_loss': train_aux_loss,
+           'train_accuracy': train_acc,
            'val_total_loss': val_total_loss,
            'val_action_loss': val_action_loss,
-           'val_aux_loss': val_aux_loss
+           'val_aux_loss': val_aux_loss,
+           'val_accuracy': val_acc,
        }
        
-       print(f"Epoch {epoch + 1} - Train Loss: {train_total_loss:.4f}, Val Loss: {val_total_loss:.4f}")
+       print(f"Epoch {epoch + 1} - Train Loss: {train_total_loss:.4f}, Val Loss: {val_total_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
        
        # Early stopping
        if val_total_loss < best_val_loss:

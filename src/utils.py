@@ -21,10 +21,12 @@ def load_tracking_results(tracks_path, visibles_path):
     """
     Load tracks and visibles from .npz files.
     """
-    tracks = np.load(tracks_path)['tracks']
-    visibles = np.load(visibles_path)['visibles']
-    # print(f"Tracks loaded from: {tracks_path}")
-    # print(f"Visibles loaded from: {visibles_path}")
+    try:
+        tracks = np.load(tracks_path, allow_pickle=True)['tracks']
+        visibles = np.load(visibles_path, allow_pickle=True)['visibles']
+    except Exception as e:
+        print(f"Error loading files:\n  Tracks: {tracks_path}\n  Visibles: {visibles_path}")
+        raise e
     return tracks, visibles
 
 
@@ -252,3 +254,130 @@ def load_checkpoint(checkpoint_dir, device, models, optimizer):
         print(f"Warning: Optimizer state file {torch_path} not found.")
 
     return config, run_logs
+
+def compute_action_accuracies(pred_actions_discrete, gt_actions_discrete, mode='train'):
+    """
+    Compute various accuracy metrics for action predictions.
+    
+    Args:
+        pred_actions_discrete: Predicted action tensor of shape (batch_size, num_future_actions, action_dim)
+        gt_actions_discrete: Ground truth action tensor of the same shape as pred_actions_discrete
+
+    Returns:
+        dict: Dictionary containing accuracy metrics.
+    """
+    pos_idx = slice(0, 3)
+    rot_idx = slice(3, 6)
+    gripper_idx = 6
+
+    batch_size, num_future_actions, _ = pred_actions_discrete.shape
+
+    # Strict accuracy metrics
+    correct_strict_first_action = (pred_actions_discrete[:, 0] == gt_actions_discrete[:, 0]).all(dim=1).sum().item()
+    correct_strict_all_actions = (pred_actions_discrete == gt_actions_discrete).all(dim=2).all(dim=1).sum().item()
+
+    # Per-component accuracy for first action
+    pos_x_acc_first = (pred_actions_discrete[:, 0, 0] == gt_actions_discrete[:, 0, 0]).sum().item()
+    pos_y_acc_first = (pred_actions_discrete[:, 0, 1] == gt_actions_discrete[:, 0, 1]).sum().item()
+    pos_z_acc_first = (pred_actions_discrete[:, 0, 2] == gt_actions_discrete[:, 0, 2]).sum().item()
+
+    rot_x_acc_first = (pred_actions_discrete[:, 0, 3] == gt_actions_discrete[:, 0, 3]).sum().item()
+    rot_y_acc_first = (pred_actions_discrete[:, 0, 4] == gt_actions_discrete[:, 0, 4]).sum().item()
+    rot_z_acc_first = (pred_actions_discrete[:, 0, 5] == gt_actions_discrete[:, 0, 5]).sum().item()
+
+    gripper_acc_first = (pred_actions_discrete[:, 0, 6] == gt_actions_discrete[:, 0, 6]).sum().item()
+
+    # Strict position and rotation accuracy for first action
+    correct_position_first = (pred_actions_discrete[:, 0, pos_idx] == gt_actions_discrete[:, 0, pos_idx]).all(dim=1).sum().item()
+    correct_rotation_first = (pred_actions_discrete[:, 0, rot_idx] == gt_actions_discrete[:, 0, rot_idx]).all(dim=1).sum().item()
+
+    # Per-component accuracy across all future actions
+    pos_x_acc_all = (pred_actions_discrete[:, :, 0] == gt_actions_discrete[:, :, 0]).sum().item()
+    pos_y_acc_all = (pred_actions_discrete[:, :, 1] == gt_actions_discrete[:, :, 1]).sum().item()
+    pos_z_acc_all = (pred_actions_discrete[:, :, 2] == gt_actions_discrete[:, :, 2]).sum().item()
+
+    rot_x_acc_all = (pred_actions_discrete[:, :, 3] == gt_actions_discrete[:, :, 3]).sum().item()
+    rot_y_acc_all = (pred_actions_discrete[:, :, 4] == gt_actions_discrete[:, :, 4]).sum().item()
+    rot_z_acc_all = (pred_actions_discrete[:, :, 5] == gt_actions_discrete[:, :, 5]).sum().item()
+
+    gripper_acc_all = (pred_actions_discrete[:, :, 6] == gt_actions_discrete[:, :, 6]).sum().item()
+
+    # Strict position and rotation accuracy across all actions
+    correct_position_all = (pred_actions_discrete[:, :, pos_idx] == gt_actions_discrete[:, :, pos_idx]).all(dim=2).all(dim=1).sum().item()
+    correct_rotation_all = (pred_actions_discrete[:, :, rot_idx] == gt_actions_discrete[:, :, rot_idx]).all(dim=2).all(dim=1).sum().item()
+
+    # Strict accuracy for gripper across all actions
+    correct_gripper_all = (pred_actions_discrete[:, :, gripper_idx] == gt_actions_discrete[:, :, gripper_idx]).all(dim=1).sum().item()
+
+    # Normalize metrics
+    metrics = {
+        'strict_first_action': correct_strict_first_action / batch_size,
+        'strict_all_actions': correct_strict_all_actions / batch_size,
+        'pos_x_acc_first': pos_x_acc_first / batch_size,
+        'pos_y_acc_first': pos_y_acc_first / batch_size,
+        'pos_z_acc_first': pos_z_acc_first / batch_size,
+        'rot_x_acc_first': rot_x_acc_first / batch_size,
+        'rot_y_acc_first': rot_y_acc_first / batch_size,
+        'rot_z_acc_first': rot_z_acc_first / batch_size,
+        'gripper_acc_first': gripper_acc_first / batch_size,
+        'strict_position_first': correct_position_first / batch_size,
+        'strict_rotation_first': correct_rotation_first / batch_size,
+        'pos_x_acc_all': pos_x_acc_all / (batch_size * num_future_actions),
+        'pos_y_acc_all': pos_y_acc_all / (batch_size * num_future_actions),
+        'pos_z_acc_all': pos_z_acc_all / (batch_size * num_future_actions),
+        'rot_x_acc_all': rot_x_acc_all / (batch_size * num_future_actions),
+        'rot_y_acc_all': rot_y_acc_all / (batch_size * num_future_actions),
+        'rot_z_acc_all': rot_z_acc_all / (batch_size * num_future_actions),
+        'gripper_acc_all': gripper_acc_all / (batch_size * num_future_actions),
+        'strict_position_all': correct_position_all / batch_size,
+        'strict_rotation_all': correct_rotation_all / batch_size,
+        'strict_gripper_all': correct_gripper_all / batch_size,
+    }
+    
+    # Add mode prefix to each metric key
+    # metrics = {f'{mode}_{key}': value for key, value in metrics.items()}
+
+    return metrics
+
+
+def test_compute_action_accuracies():
+    batch_size = 2
+    num_future_actions = 4
+    action_dim = 7
+
+    # Test case 1: Perfect match
+    gt_actions_discrete = torch.randint(0, 256, (batch_size, num_future_actions, action_dim))
+    pred_actions_discrete = gt_actions_discrete.clone()
+    metrics = compute_action_accuracies(pred_actions_discrete, gt_actions_discrete)
+    
+    print("Metrics for perfect match test case:", metrics)
+
+    assert metrics['strict_first_action'] == 1.0, "Failed perfect match - strict first action"
+    assert metrics['strict_all_actions'] == 1.0, "Failed perfect match - strict all actions"
+    assert all(value == 1.0 for key, value in metrics.items()), "Failed perfect match - any metric"
+
+    # Test case 2: Complete mismatch
+    pred_actions_discrete = (gt_actions_discrete + 1) % 256
+    metrics = compute_action_accuracies(pred_actions_discrete, gt_actions_discrete)
+
+    assert metrics['strict_first_action'] == 0.0, "Failed complete mismatch - strict first action"
+    assert metrics['strict_all_actions'] == 0.0, "Failed complete mismatch - strict all actions"
+    assert all(value == 0.0 for key, value in metrics.items()), "Failed complete mismatch - any metric"
+
+    # Test case 3: Only position matches
+    pred_actions_discrete = gt_actions_discrete.clone()
+    pred_actions_discrete[:, :, 3:6] += 1  # Change rotation
+    pred_actions_discrete[:, :, 6] += 1    # Change gripper
+    metrics = compute_action_accuracies(pred_actions_discrete, gt_actions_discrete)
+
+    assert metrics['pos_x_acc_first'] == 1.0, "Failed partial match - pos X first"
+    assert metrics['pos_y_acc_first'] == 1.0, "Failed partial match - pos Y first"
+    assert metrics['pos_z_acc_first'] == 1.0, "Failed partial match - pos Z first"
+    assert metrics['strict_rotation_first'] == 0.0, "Failed partial match - strict rotation first"
+    assert metrics['gripper_acc_first'] == 0.0, "Failed partial match - gripper first"
+    assert metrics['strict_position_all'] == 1.0, "Failed partial match - strict position all"
+
+    print("All test cases passed!")
+
+# # Run the test
+# test_compute_action_accuracies()
