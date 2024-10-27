@@ -19,14 +19,27 @@ def construct_episode_label(episode):
 
 def load_tracking_results(tracks_path, visibles_path):
     """
-    Load tracks and visibles from .npz files.
+    Load tracking results from given file paths, with simplified error handling.
+
+    Args:
+        tracks_path (Path): Path to the .npz file containing tracks data.
+        visibles_path (Path): Path to the .npz file containing visibles data.
+
+    Returns:
+        tuple: (tracks, visibles) loaded from the .npz files, or (None, None) if loading fails.
     """
     try:
         tracks = np.load(tracks_path, allow_pickle=True)['tracks']
+    except Exception as e:
+        print(f"Error loading tracks from {tracks_path}: {e}")
+        tracks = None
+
+    try:
         visibles = np.load(visibles_path, allow_pickle=True)['visibles']
     except Exception as e:
-        print(f"Error loading files:\n  Tracks: {tracks_path}\n  Visibles: {visibles_path}")
-        raise e
+        print(f"Error loading visibles from {visibles_path}: {e}")
+        visibles = None
+
     return tracks, visibles
 
 
